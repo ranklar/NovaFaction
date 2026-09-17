@@ -3,6 +3,7 @@ using NovaFaction.Sim.Content;
 using NovaFaction.Sim.Economy;
 using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
+using NovaFaction.Sim.Observers;
 using NovaFaction.Sim.Spells;
 using NovaFaction.Sim.Units;
 
@@ -48,12 +49,18 @@ namespace NovaFaction.Sim.Combat
             public Fix StructureDamage;
             public Fix SplashRadius;
             public TargetLayer CanHit;
+            /// <summary>Who dealt it, for the observer only.</summary>
+            public DamageSource Source;
         }
 
-        internal static BattleOutcome Tick(MatchState state, MatchRules rules)
+        /// <summary>
+        /// Runs the tick's combat. <paramref name="observer"/> (optional) hears about structure damage and unit deaths; it
+        /// never changes what happens.
+        /// </summary>
+        internal static BattleOutcome Tick(MatchState state, MatchRules rules, IMatchObserver? observer = null)
         {
             var outcome = new BattleOutcome();
-            var ctx = new Context(state, rules);
+            var ctx = new Context(state, rules, observer);
             ctx.CountDownCooldowns();
             ctx.DecideUnits();
             ctx.DecideStructures();
@@ -97,8 +104,13 @@ namespace NovaFaction.Sim.Combat
 
             private readonly List<Hit> _hits = new List<Hit>();
 
-            public Context(MatchState state, MatchRules rules)
+            private readonly IMatchObserver? _observer;
+            // With an observer: the hit that brought each unit (by index) to 0 HP.
+            private readonly DamageSource[]? _killedBy;
+
+            public Context(MatchState state, MatchRules rules, IMatchObserver? observer)
             {
+                _observer = observer;
                 _state = state;
                 _rules = rules;
                 _map = state.Map;
@@ -137,6 +149,7 @@ namespace NovaFaction.Sim.Combat
                 _mayCapture = new bool[_n];
                 _attackNow = new bool[_n];
                 _structureFires = new bool[state.Structures.Count];
+                _killedBy = observer != null ? new DamageSource[_n] : null;
             }
 
             // ------------------------------------------------------------ cooldowns
@@ -502,6 +515,7 @@ namespace NovaFaction.Sim.Combat
                             StructureDamage = shot.Damage,
                             SplashRadius = shot.SplashRadius,
                             CanHit = shot.CanHit,
+                            Source = shot.Source,
                         });
                     }
                     // Arrived: removed either way (a dead target means the shot fizzles).
@@ -564,6 +578,7 @@ namespace NovaFaction.Sim.Combat
                     StructureDamage = spell.StructureDamage,
                     SplashRadius = def.Radius,
                     CanHit = def.Targets,
+                    Source = DamageSource.ForSpell(spell),
                 });
             }
 
@@ -581,6 +596,7 @@ namespace NovaFaction.Sim.Combat
                         StructureDamage = strike.StructureDamage,
                         SplashRadius = strike.Radius,
                         CanHit = TargetLayer.Both,
+                        Source = strike.Source,
                     });
                 }
                 _state.AbilityStrikes.Clear();
@@ -601,7 +617,8 @@ namespace NovaFaction.Sim.Combat
                     FixVector2 aim = AimPoint(_start[i], u.Target);
                     if (def.IsRanged)
                     {
-                        Fire(u.Owner, _start[i], u.Target, aim, def.ProjectileSpeed, u.Damage, def.SplashRadius, def.Targets);
+                        Fire(u.Owner, _start[i], u.Target, aim, def.ProjectileSpeed, u.Damage, def.SplashRadius, def.Targets,
+                            DamageSource.ForUnit(u));
                     }
                     else
                     {
@@ -614,6 +631,7 @@ namespace NovaFaction.Sim.Combat
                             StructureDamage = u.Damage,
                             SplashRadius = def.SplashRadius,
                             CanHit = def.Targets,
+                            Source = DamageSource.ForUnit(u),
                         });
                     }
                 }
@@ -629,7 +647,7 @@ namespace NovaFaction.Sim.Combat
                     TargetRef target = TargetRef.Unit(s.TargetUnitId);
                     FixVector2 from = UnitMovement.FootprintCenter(_grid, s.Index);
                     Fire(s.Owner, from, target, AimPoint(from, target), stats.ProjectileSpeed, s.Damage, Fix.Zero,
-                        stats.Targets);
+                        stats.Targets, DamageSource.ForStructure(s));
                 }
             }
 
@@ -640,10 +658,10 @@ namespace NovaFaction.Sim.Combat
                     : _start[_state.IndexOfUnit(target.Id)];
 
             private void Fire(int owner, FixVector2 from, TargetRef target, FixVector2 aim, Fix speedPerSecond,
-                Fix damage, Fix splash, TargetLayer canHit)
+                Fix damage, Fix splash, TargetLayer canHit, DamageSource source)
             {
                 var shot = new Projectile(_state.NextProjectileId++, owner, from, target, aim,
-                    speedPerSecond / _ticksPerSecond, damage, splash, canHit);
+                    speedPerSecond / _ticksPerSecond, damage, splash, canHit) { Source = source };
                 _state.ProjectileList.Add(shot); // ids only grow, so the list stays sorted
             }
 
@@ -665,12 +683,12 @@ namespace NovaFaction.Sim.Combat
                             int k = _state.IndexOfUnit(hit.Target.Id);
                             if (k >= 0)
                             {
-                                DamageUnit(_units[k], hit.Damage);
+                                DamageUnit(k, hit.Damage, hit.Source);
                             }
                         }
                         else
                         {
-                            DamageStructure(hit.Target.Id, hit.Owner, hit.StructureDamage, outcome);
+                            DamageStructure(hit.Target.Id, hit.Owner, hit.StructureDamage, outcome, hit.Source);
                         }
                         continue;
                     }
@@ -682,7 +700,7 @@ namespace NovaFaction.Sim.Combat
                         if (other.Owner != hit.Owner && TargetRules.CanHitUnit(hit.CanHit, other.IsFlying)
                             && FixVector2.Distance(_start[k], hit.Impact) <= radius)
                         {
-                            DamageUnit(other, hit.Damage);
+                            DamageUnit(k, hit.Damage, hit.Source);
                         }
                     }
                     if (TargetRules.CanHitStructures(hit.CanHit))
@@ -691,23 +709,29 @@ namespace NovaFaction.Sim.Combat
                         {
                             if (s.Owner != hit.Owner && UnitMovement.DistanceToFootprint(_grid, hit.Impact, s.Index) <= radius)
                             {
-                                DamageStructure(s.Index, hit.Owner, hit.StructureDamage, outcome);
+                                DamageStructure(s.Index, hit.Owner, hit.StructureDamage, outcome, hit.Source);
                             }
                         }
                     }
                 }
             }
 
-            private static void DamageUnit(Unit unit, Fix damage)
+            private void DamageUnit(int k, Fix damage, DamageSource source)
             {
+                Unit unit = _units[k];
+                bool wasAlive = unit.IsAlive;
                 unit.Hp = Fix.Max(Fix.Zero, unit.Hp - damage);
+                if (_killedBy != null && wasAlive && !unit.IsAlive)
+                {
+                    _killedBy[k] = source;
+                }
             }
 
             /// <summary>
             /// Removes up to the structure's remaining HP, credits it to the attacker's score, and destroys the
             /// structure at 0 HP (adding the destruction bonus, opening the footprint and unlocking deploy zones).
             /// </summary>
-            private void DamageStructure(int index, int attacker, Fix damage, BattleOutcome outcome)
+            private void DamageStructure(int index, int attacker, Fix damage, BattleOutcome outcome, DamageSource source)
             {
                 StructureState s = _state.Structures[index];
                 if (s.IsDestroyed || s.Owner == attacker)
@@ -723,6 +747,8 @@ namespace NovaFaction.Sim.Combat
                 s.Hp -= removed;
                 player.Score += removed;
                 outcome.StructureDamage[attacker] += removed;
+                string kind = DamageSource.KindName(s.Definition.Kind);
+                _observer?.OnStructureDamaged(new StructureDamagedEvent(_state.Tick, index, s.Owner, kind, removed, s.Hp, source));
                 if (s.Hp == Fix.Zero)
                 {
                     player.Score += s.Stats.DestructionBonus;
@@ -730,6 +756,8 @@ namespace NovaFaction.Sim.Combat
                     s.TargetUnitId = StructureState.NoTarget;
                     s.AttackCooldownTicks = 0;
                     outcome.DestroyedStructures.Add(index);
+                    _observer?.OnStructureDestroyed(new StructureDestroyedEvent(_state.Tick, index, s.Owner, kind,
+                        s.Stats.DestructionBonus, source));
                 }
             }
 
@@ -789,9 +817,18 @@ namespace NovaFaction.Sim.Combat
             public void CleanUp(BattleOutcome outcome)
             {
                 bool anyDead = false;
-                foreach (Unit u in _units)
+                for (int k = 0; k < _n; k++) // the unit list does not change during combat
                 {
-                    anyDead |= !u.IsAlive;
+                    Unit u = _units[k];
+                    if (!u.IsAlive)
+                    {
+                        anyDead = true;
+                        if (_observer != null)
+                        {
+                            _observer.OnUnitDied(new UnitDiedEvent(_state.Tick, u.Id, u.Owner, u.Definition.Id, u.Level,
+                                u.Position, _killedBy![k]));
+                        }
+                    }
                 }
                 if (anyDead)
                 {

@@ -9,6 +9,7 @@ using NovaFaction.Sim.Controllers;
 using NovaFaction.Sim.Economy;
 using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
+using NovaFaction.Sim.Observers;
 using NovaFaction.Sim.Spells;
 using NovaFaction.Sim.Units;
 
@@ -24,6 +25,7 @@ namespace NovaFaction.Sim
         private readonly CommandLog _log = new CommandLog();
         private readonly IController[] _controllers = new IController[Command.PlayerCount];
         private readonly List<Command> _tickCommands = new List<Command>();
+        private bool _ticking;
 
         /// <summary>
         /// A match between the setup's players: a <see cref="BotController"/> for each player the setup gives a bot,
@@ -53,6 +55,13 @@ namespace NovaFaction.Sim
         public CommandLog Log => _log;
 
         public bool IsEnded => State.Phase == MatchPhase.Ended;
+
+        /// <summary>
+        /// Optional listener for match events (deploys, casts, deaths, structure damage, captures, chests, gold, the
+        /// end). It is not part of the match: with or without one, every tick's state and hash are the same. May be
+        /// set or cleared between ticks.
+        /// </summary>
+        public IMatchObserver? Observer { get; set; }
 
         /// <summary>The controller issuing the player's commands.</summary>
         public IController GetController(int player) => _controllers[MapDefinition.CheckPlayer(player)];
@@ -91,7 +100,23 @@ namespace NovaFaction.Sim
             {
                 throw new InvalidOperationException("The match has ended; Tick() may not be called.");
             }
+            if (_ticking)
+            {
+                throw new InvalidOperationException("Tick() may not be called while a tick is running (from an observer).");
+            }
+            _ticking = true;
+            try
+            {
+                RunTick(commands);
+            }
+            finally
+            {
+                _ticking = false;
+            }
+        }
 
+        private void RunTick(IReadOnlyList<Command> commands)
+        {
             // Validate everything before changing any state.
             ValidateCommands(commands, nameof(commands));
             foreach (Command command in commands)
@@ -133,9 +158,9 @@ namespace NovaFaction.Sim
             }
             FireDueSpawns(); // only zero-delay deploys from this tick are due here
 
-            BattleOutcome outcome = BattleSystem.Tick(State, Rules);
+            BattleOutcome outcome = BattleSystem.Tick(State, Rules, Observer);
             ResolveCombat(outcome);
-            MapGoldSystem.Tick(State, Rules);
+            MapGoldSystem.Tick(State, Rules, Observer);
 
             foreach (PlayerState player in State.Players)
             {
@@ -145,15 +170,19 @@ namespace NovaFaction.Sim
             State.Tick++;
             State.ClockRemainingTicks--;
             ExpireBuffs();
-            if (IsEnded)
+            if (!IsEnded)
             {
-                return;
+                FireDueSpawns();
+                MapGoldSystem.SpawnDueChests(State, Rules);
+                if (State.ClockRemainingTicks == 0)
+                {
+                    OnClockExpired();
+                }
             }
-            FireDueSpawns();
-            MapGoldSystem.SpawnDueChests(State, Rules);
-            if (State.ClockRemainingTicks == 0)
+            if (IsEnded && Observer != null)
             {
-                OnClockExpired();
+                Observer.OnMatchEnded(new MatchEndedEvent(State.Tick, State.Winner, State.EndReason, State.TieBreakRule,
+                    State.GetPlayer(0).Score, State.GetPlayer(1).Score));
             }
         }
 
@@ -251,13 +280,17 @@ namespace NovaFaction.Sim
             if (card is SpellDefinition spell)
             {
                 int pulse = spell.IsZone ? Rules.SecondsToTicks(spell.ZoneTickSeconds) : 0;
-                State.PendingSpellList.Add(new SpellInstance(State.NextSpellId++, player.Index, spell, command.Target,
+                var instance = new SpellInstance(State.NextSpellId++, player.Index, spell, command.Target,
                     State.Tick + Rules.SecondsToTicks(spell.CastDelaySeconds), Rules.SecondsToTicks(spell.DurationSeconds),
-                    pulse, Rules.LevelFactor(level))); // ids only grow, so the list stays sorted
+                    pulse, Rules.LevelFactor(level));
+                State.PendingSpellList.Add(instance); // ids only grow, so the list stays sorted
+                Observer?.OnSpellCast(new SpellCastEvent(State.Tick, player.Index, spell.Id, instance.Id, level, card.Cost,
+                    command.Target, instance.LandTick));
                 return;
             }
             State.PendingSpawnList.Add(new PendingSpawn(State.Tick + Rules.DeploySpawnDelayTicks, player.Index,
                 (UnitDefinition)card, command.Target, level));
+            Observer?.OnCardDeployed(new CardDeployedEvent(State.Tick, player.Index, card.Id, level, card.Cost, command.Target));
         }
 
         /// <summary>
@@ -277,6 +310,7 @@ namespace NovaFaction.Sim
                 return;
             }
             player.AbilityReadyTick = State.Tick + Rules.SecondsToTicks(ability.CooldownSeconds);
+            Observer?.OnAbilityCast(new AbilityCastEvent(State.Tick, player.Index, leader.Id, ability.Type, target));
             Fix amount = ability.Amount * Rules.LevelFactor(player.Deck.LeaderLevel);
             switch (ability.Type)
             {
@@ -288,6 +322,7 @@ namespace NovaFaction.Sim
                         Radius = ability.Radius,
                         Damage = amount,
                         StructureDamage = amount * ability.StructureDamageMultiplier,
+                        Source = DamageSource.ForAbility(player.Index, leader.Id),
                     });
                     break;
                 case AbilityType.Rally:
@@ -407,6 +442,19 @@ namespace NovaFaction.Sim
             if (gold > afterBase)
             {
                 player.GoldFromMap += gold - afterBase;
+            }
+            if (Observer != null)
+            {
+                Fix baseReceived = Fix.Min(afterBase, gold) - player.Gold;
+                Fix mineReceived = gold - Fix.Min(afterBase, gold);
+                if (baseReceived > Fix.Zero)
+                {
+                    Observer.OnGoldAccrued(new GoldAccruedEvent(State.Tick, player.Index, GoldSource.Base, baseReceived));
+                }
+                if (mineReceived > Fix.Zero)
+                {
+                    Observer.OnGoldAccrued(new GoldAccruedEvent(State.Tick, player.Index, GoldSource.Mine, mineReceived));
+                }
             }
             player.Gold = gold;
         }

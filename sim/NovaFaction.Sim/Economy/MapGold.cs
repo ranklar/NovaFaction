@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using NovaFaction.Sim.Content;
 using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
+using NovaFaction.Sim.Observers;
 using NovaFaction.Sim.Units;
 
 namespace NovaFaction.Sim.Economy
@@ -99,22 +100,28 @@ namespace NovaFaction.Sim.Economy
         /// <summary>
         /// Updates mine capture, then capture give-ups, then collects chests. Chest gold is added at once, limited by the
         /// gold cap; what was actually received also counts toward <see cref="PlayerState.GoldFromMap"/>.
+        /// <paramref name="observer"/> (optional) hears about captures and chests; it never changes what happens.
         /// </summary>
-        internal static void Tick(MatchState state, MatchRules rules)
+        internal static void Tick(MatchState state, MatchRules rules, IMatchObserver? observer = null)
         {
             IReadOnlyList<Unit> units = state.Units;
             IReadOnlyList<MineState> mines = state.Mines;
             var advancedFor = new int[mines.Count];
             foreach (MineState mine in mines) // index order
             {
+                int previousOwner = mine.Owner;
                 advancedFor[mine.Index] = UpdateMine(mine, units, rules);
+                if (observer != null && mine.Owner != previousOwner)
+                {
+                    observer.OnMineCaptured(new MineCapturedEvent(state.Tick, mine.Index, mine.Owner, previousOwner));
+                }
             }
             UpdateGiveUps(state, rules, advancedFor);
             foreach (ChestState chest in state.Chests) // index order
             {
                 if (chest.IsPresent)
                 {
-                    TryCollect(state, chest, units, rules);
+                    TryCollect(state, chest, units, rules, observer);
                 }
             }
         }
@@ -219,7 +226,8 @@ namespace NovaFaction.Sim.Economy
         /// The closest unit within the collect radius takes the chest (ties: lower unit id, so a same-tick
         /// arrival never depends on processing order). The chest is used up even if the player is at the gold cap.
         /// </summary>
-        private static void TryCollect(MatchState state, ChestState chest, IReadOnlyList<Unit> units, MatchRules rules)
+        private static void TryCollect(MatchState state, ChestState chest, IReadOnlyList<Unit> units, MatchRules rules,
+            IMatchObserver? observer)
         {
             Unit? best = null;
             Fix bestDistance = Fix.MaxValue;
@@ -244,6 +252,14 @@ namespace NovaFaction.Sim.Economy
             {
                 player.Gold = gold;
                 player.GoldFromMap += received;
+            }
+            if (observer != null)
+            {
+                observer.OnChestCollected(new ChestCollectedEvent(state.Tick, chest.Index, best.Owner, best.Id, received));
+                if (received > Fix.Zero)
+                {
+                    observer.OnGoldAccrued(new GoldAccruedEvent(state.Tick, best.Owner, GoldSource.Chest, received));
+                }
             }
         }
 

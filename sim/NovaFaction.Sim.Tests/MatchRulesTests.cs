@@ -34,7 +34,8 @@ public class MatchRulesTests
   ""mineCaptureGiveUpSeconds"": 3,
   ""mineCaptureRetrySeconds"": 6,
   ""maxUnitLevel"": 15,
-  ""levelStatBonusPerLevel"": 0.06
+  ""levelStatBonusPerLevel"": 0.06,
+  ""rulesVersion"": 1
 }".Replace("\r\n", "\n");
 
     internal static string ContentPath(string fileName) =>
@@ -79,6 +80,7 @@ public class MatchRulesTests
         Assert.Equal(120, rules.MineCaptureRetryTicks);
         Assert.Equal(15, rules.MaxUnitLevel);
         Assert.Equal(Fix.Parse("0.06"), rules.LevelStatBonusPerLevel);
+        Assert.True(rules.RulesVersion >= 1);
 
         // Map gold: tick conversions and the cross-field limits hold for the shipped values.
         Assert.Equal(80, rules.MineCaptureTicks);
@@ -141,6 +143,7 @@ public class MatchRulesTests
     [InlineData("mineCaptureRetrySeconds")]
     [InlineData("maxUnitLevel")]
     [InlineData("levelStatBonusPerLevel")]
+    [InlineData("rulesVersion")]
     public void MissingKey_IsRejected(string key)
     {
         string json = string.Join("\n", ValidJson.Split('\n').Where(line => !line.Contains("\"" + key + "\"")));
@@ -199,12 +202,25 @@ public class MatchRulesTests
     [InlineData("\"maxUnitLevel\": 15", "\"maxUnitLevel\": 1.5", "whole number")]
     [InlineData("\"levelStatBonusPerLevel\": 0.06", "\"levelStatBonusPerLevel\": -0.01", "at least")]
     [InlineData("\"levelStatBonusPerLevel\": 0.06", "\"levelStatBonusPerLevel\": 1.5", "at most 1")]
+    [InlineData("\"rulesVersion\": 1", "\"rulesVersion\": 0", "between 1 and")]
+    [InlineData("\"rulesVersion\": 1", "\"rulesVersion\": 1.5", "whole number")]
     public void InvalidValues_AreRejected(string original, string replacement, string fragment)
     {
         Assert.Contains(original, ValidJson);
         var ex = Assert.Throws<SimJsonException>(() => MatchRules.FromJson(ValidJson.Replace(original, replacement)));
         Assert.Contains(fragment, ex.Message);
         Assert.True(ex.Line > 0, "error should point at the offending value");
+    }
+
+    [Fact]
+    public void ContentHash_CoversValuesAndVersion_ButNotPlaceholdersOrFormatting()
+    {
+        ulong hash = MatchRules.FromJson(ValidJson).ContentHash;
+        Assert.Equal(hash, MatchRules.FromJson(ValidJson.Replace("\n", "\r\n  ")).ContentHash);
+        Assert.Equal(hash, MatchRules.FromJson(ValidJson.Replace("\"deckSize\": 8",
+            "\"deckSize\": 8,\n  \"tuningPlaceholders\": [\"goldCap\"]")).ContentHash);
+        Assert.NotEqual(hash, MatchRules.FromJson(ValidJson.Replace("\"chestGold\": 0.75", "\"chestGold\": 0.8")).ContentHash);
+        Assert.NotEqual(hash, MatchRules.FromJson(ValidJson.Replace("\"rulesVersion\": 1", "\"rulesVersion\": 2")).ContentHash);
     }
 
     [Fact]

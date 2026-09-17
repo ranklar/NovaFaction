@@ -458,21 +458,13 @@ public class DeterminismTests
         // new rule), update the constants and bump MatchState.HashFormatVersion when the layout
         // changed. If it changes unexpectedly, determinism broke.
         // Uses fixed rules (not content/rules.json) so tuning the content does not move the pin.
-        MatchRules rules = MatchRules.FromJson(@"{
-  ""ticksPerSecond"": 20, ""matchLengthSeconds"": 180, ""suddenDeathSeconds"": 60,
-  ""goldBaseIncomePerSecond"": 0.35, ""goldStartingAmount"": 5, ""goldCap"": 10,
-  ""deploySpawnDelaySeconds"": 1, ""handSize"": 4, ""deckSize"": 8,
-  ""unitSeparationDistance"": 0.6, ""unitSeparationPushPerSecond"": 1.5, ""unitSpawnSpacing"": 0.5,
-  ""suddenDeathIncomeMultiplier"": 2, ""unitStoppedPushFactor"": 0.3, ""aggroRadius"": 5.5, ""meleeTargetCrowdPenalty"": 1,
-  ""mineCaptureRadius"": 1.5, ""mineCaptureSeconds"": 5, ""mineIncomePerSecond"": 0.05, ""mineIncomeCap"": 0.1,
-  ""chestFirstSpawnSeconds"": 30, ""chestSpawnIntervalSeconds"": 30, ""chestGold"": 0.75, ""chestCollectRadius"": 0.75,
-  ""mineCaptureGiveUpSeconds"": 3, ""mineCaptureRetrySeconds"": 6, ""maxUnitLevel"": 15, ""levelStatBonusPerLevel"": 0.06 }");
+        MatchRules rules = PinRules();
         // Likewise a fixed inline map, so editing content/maps does not move the pin.
         MapDefinition map = MapTestData.Small();
         // ...and fixed structure stats, so tuning content/structures.json does not move it either.
-        StructureCatalog structures = TestSim.Structures(hp: "3000", keepHp: "6000", damage: "40", range: "2.5");
-        ulong initialHash = TestSim.New(rules, map, 12345, structures).ComputeHash();
-        Simulation sim = SimulationTests.RunFullMatch(rules, 12345, ScriptedLog(rules, 12345, map), map: map,
+        StructureCatalog structures = PinStructures();
+        ulong initialHash = TestSim.New(rules, map, PinSeed, structures).ComputeHash();
+        Simulation sim = SimulationTests.RunFullMatch(rules, PinSeed, ScriptedLog(rules, PinSeed, map), map: map,
             structures: structures);
         // The pin must cover deploys, spawns, movement and combat, not just the clock.
         MatchState s = sim.State;
@@ -499,7 +491,20 @@ public class DeterminismTests
     // Re-pinned Sept 2026 for hash format 7 (levels, leader passive and War Cry, capture give-up; the scripted
     // LeaderAbility commands now act or are counted as ignored).
     private const ulong PinnedInitialHash = 0x3EEBA7B72A3551E2UL;
-    private const ulong PinnedFinalHash = 0x3C65BB24DCB37D9AUL;
+    internal const ulong PinnedFinalHash = 0x3C65BB24DCB37D9AUL;
+    internal const ulong PinSeed = 12345;
+
+    internal static MatchRules PinRules() => MatchRules.FromJson(@"{
+  ""ticksPerSecond"": 20, ""matchLengthSeconds"": 180, ""suddenDeathSeconds"": 60,
+  ""goldBaseIncomePerSecond"": 0.35, ""goldStartingAmount"": 5, ""goldCap"": 10,
+  ""deploySpawnDelaySeconds"": 1, ""handSize"": 4, ""deckSize"": 8,
+  ""unitSeparationDistance"": 0.6, ""unitSeparationPushPerSecond"": 1.5, ""unitSpawnSpacing"": 0.5,
+  ""suddenDeathIncomeMultiplier"": 2, ""unitStoppedPushFactor"": 0.3, ""aggroRadius"": 5.5, ""meleeTargetCrowdPenalty"": 1,
+  ""mineCaptureRadius"": 1.5, ""mineCaptureSeconds"": 5, ""mineIncomePerSecond"": 0.05, ""mineIncomeCap"": 0.1,
+  ""chestFirstSpawnSeconds"": 30, ""chestSpawnIntervalSeconds"": 30, ""chestGold"": 0.75, ""chestCollectRadius"": 0.75,
+  ""mineCaptureGiveUpSeconds"": 3, ""mineCaptureRetrySeconds"": 6, ""maxUnitLevel"": 15, ""levelStatBonusPerLevel"": 0.06, ""rulesVersion"": 1 }");
+
+    internal static StructureCatalog PinStructures() => TestSim.Structures(hp: "3000", keepHp: "6000", damage: "40", range: "2.5");
 }
 
 public class StateHasherTests

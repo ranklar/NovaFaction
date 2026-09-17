@@ -45,6 +45,7 @@ namespace NovaFaction.Sim.Content
         private const string KeyMineCaptureRetrySeconds = "mineCaptureRetrySeconds";
         private const string KeyMaxUnitLevel = "maxUnitLevel";
         private const string KeyLevelStatBonusPerLevel = "levelStatBonusPerLevel";
+        private const string KeyRulesVersion = "rulesVersion";
         private const string KeyTuningPlaceholders = "tuningPlaceholders";
 
         private static readonly string[] RequiredKeys =
@@ -57,6 +58,7 @@ namespace NovaFaction.Sim.Content
             KeyMineCaptureRadius, KeyMineCaptureSeconds, KeyMineIncomePerSecond, KeyMineIncomeCap,
             KeyChestFirstSpawnSeconds, KeyChestSpawnIntervalSeconds, KeyChestGold, KeyChestCollectRadius,
             KeyMineCaptureGiveUpSeconds, KeyMineCaptureRetrySeconds, KeyMaxUnitLevel, KeyLevelStatBonusPerLevel,
+            KeyRulesVersion,
         };
 
         private MatchRules()
@@ -127,6 +129,16 @@ namespace NovaFaction.Sim.Content
         public int MaxUnitLevel { get; private set; }
         /// <summary>Hp and Damage grow by this share of the base value per level above 1.</summary>
         public Fix LevelStatBonusPerLevel { get; private set; }
+        /// <summary>
+        /// Version of the rules file, recorded in replays. Raise it whenever a rules value changes, so a replay
+        /// recorded under other rules is refused with a clear message.
+        /// </summary>
+        public int RulesVersion { get; private set; }
+        /// <summary>
+        /// Fingerprint of every rules value (not <see cref="TuningPlaceholders"/>, which does not change play), from the
+        /// parsed data like the map's content hash. Part of a replay's content version.
+        /// </summary>
+        public ulong ContentHash { get; private set; }
         /// <summary>Keys whose values are placeholders awaiting tuning, in file order.</summary>
         public IReadOnlyList<string> TuningPlaceholders { get; private set; }
 
@@ -215,6 +227,7 @@ namespace NovaFaction.Sim.Content
                 MineCaptureRetrySeconds = MinFix(root, KeyMineCaptureRetrySeconds, Fix.Zero),
                 MaxUnitLevel = RangeInt(root, KeyMaxUnitLevel, 1, 100),
                 LevelStatBonusPerLevel = MinFix(root, KeyLevelStatBonusPerLevel, Fix.Zero),
+                RulesVersion = RangeInt(root, KeyRulesVersion, 1, int.MaxValue),
             };
 
             // Cross-field rules.
@@ -288,7 +301,43 @@ namespace NovaFaction.Sim.Content
             {
                 rules.TuningPlaceholders = ReadPlaceholders(placeholders);
             }
+            rules.ContentHash = rules.ComputeContentHash();
             return rules;
+        }
+
+        private ulong ComputeContentHash()
+        {
+            var h = new StateHasher();
+            h.Add(RulesVersion);
+            h.Add(TicksPerSecond);
+            h.Add(MatchLengthSeconds);
+            h.Add(SuddenDeathSeconds);
+            h.Add(SuddenDeathIncomeMultiplier);
+            h.Add(GoldBaseIncomePerSecond);
+            h.Add(GoldStartingAmount);
+            h.Add(GoldCap);
+            h.Add(DeploySpawnDelaySeconds);
+            h.Add(HandSize);
+            h.Add(DeckSize);
+            h.Add(UnitSeparationDistance);
+            h.Add(UnitSeparationPushPerSecond);
+            h.Add(UnitStoppedPushFactor);
+            h.Add(UnitSpawnSpacing);
+            h.Add(AggroRadius);
+            h.Add(MeleeTargetCrowdPenalty);
+            h.Add(MineCaptureRadius);
+            h.Add(MineCaptureSeconds);
+            h.Add(MineIncomePerSecond);
+            h.Add(MineIncomeCap);
+            h.Add(ChestFirstSpawnSeconds);
+            h.Add(ChestSpawnIntervalSeconds);
+            h.Add(ChestGold);
+            h.Add(ChestCollectRadius);
+            h.Add(MineCaptureGiveUpSeconds);
+            h.Add(MineCaptureRetrySeconds);
+            h.Add(MaxUnitLevel);
+            h.Add(LevelStatBonusPerLevel);
+            return h.Value;
         }
 
         private static string[] ReadPlaceholders(JsonValue list)

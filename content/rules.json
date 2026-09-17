@@ -27,6 +27,7 @@
   "mineCaptureRetrySeconds": 6,
   "maxUnitLevel": 15,
   "levelStatBonusPerLevel": 0.06,
+  "rulesVersion": 1,
   "tuningPlaceholders": [
     "goldBaseIncomePerSecond",
     "goldStartingAmount",

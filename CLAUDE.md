@@ -13,6 +13,8 @@ verify it. He uses Windows 11 only — give PowerShell commands, never bash/WSL/
 - server/   ASP.NET Core service (created in M3).
 - content/  JSON data: units, factions, maps, missions.
 - docs/     Design doc and notes.
+- tools/    NovaFaction.Harness: .NET 10 console app for headless batches, round robins, determinism and replay
+            checks. May use System.Text.Json and Parallel (the sim may not). Output goes to tools/out/ (ignored by git).
 - builds/   Local build output. Ignored by git.
 
 ## Sim rules (sim/NovaFaction.Sim) — determinism is non-negotiable
@@ -25,6 +27,9 @@ verify it. He uses Windows 11 only — give PowerShell commands, never bash/WSL/
   (Unity 6 compiles this code; no C# 10+ features such as file-scoped namespaces, record structs,
   global usings, required members).
 - All balance numbers (stats, costs, income, timers) come from data in content/, never hardcoded.
+- Bump SimVersion.Current (sim/NovaFaction.Sim/SimVersion.cs) whenever sim logic changes in a way that can change a
+  match or its hashes; replays only re-run on the same sim version. Raise rulesVersion in content/rules.json whenever a
+  rules value changes.
 - Every feature ships with xunit tests. Include a determinism test where relevant: same seed and
   inputs twice must produce identical per-tick state hashes.
 - Run before finishing any sim task:  dotnet test sim\NovaFaction.Sim.Tests

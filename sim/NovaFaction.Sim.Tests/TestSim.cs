@@ -18,7 +18,7 @@ internal static class TestSim
     /// <summary>The capture give-up and level keys of rules.json (shipped values), for tests that write rules inline.</summary>
     internal const string LevelRulesJson =
         ", \"mineCaptureGiveUpSeconds\": 3, \"mineCaptureRetrySeconds\": 6, \"maxUnitLevel\": 15"
-        + ", \"levelStatBonusPerLevel\": 0.06";
+        + ", \"levelStatBonusPerLevel\": 0.06, \"rulesVersion\": 1";
 
     /// <summary>The movement, combat and map gold keys of rules.json, for tests that write rules inline.</summary>
     internal const string MovementRulesJson =
@@ -110,7 +110,7 @@ internal static class TestSim
             + ", \"chestFirstSpawnSeconds\": " + chestFirst + ", \"chestSpawnIntervalSeconds\": " + chestInterval
             + ", \"chestGold\": " + chestGold + ", \"chestCollectRadius\": " + chestRadius
             + ", \"mineCaptureGiveUpSeconds\": " + giveUp + ", \"mineCaptureRetrySeconds\": " + retry
-            + ", \"maxUnitLevel\": " + maxLevel + ", \"levelStatBonusPerLevel\": " + levelBonus + "}");
+            + ", \"maxUnitLevel\": " + maxLevel + ", \"levelStatBonusPerLevel\": " + levelBonus + ", \"rulesVersion\": 1}");
 
     internal static FixVector2 V(string x, string y) => new FixVector2(Fix.Parse(x), Fix.Parse(y));
 

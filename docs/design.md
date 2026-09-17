@@ -90,8 +90,9 @@ Themed factions released over time as content packs; fantasy faction first.
 ## Technical architecture
 - client/: Unity 6.3 LTS, URP, Android first. Renders sim state; no game rules in Unity code.
 - sim/: netstandard2.1 C# library. Deterministic: fixed-point math, seeded RNG, fixed 20 ticks/s,
-  flow-field pathfinding on a grid. Headless bot-vs-bot harness (HeadlessMatch; see "Controllers and bots"); per-tick state hash for
-  cross-platform determinism checks. No Unity references.
+  flow-field pathfinding on a grid. Headless bot-vs-bot matches (HeadlessMatch; see "Controllers and bots") and a harness
+  console app (tools/NovaFaction.Harness; see "Headless harness"); per-tick state hash for cross-platform determinism checks;
+  replay files (see "Replays"). No Unity references.
 - Sim numerics (sim/NovaFaction.Sim):
   - Fix = Q48.16 fixed point (long raw, 1.0 = 65536). + - * / saturate at MaxValue/MinValue
     instead of wrapping; * and / use exact 128-bit intermediates and round to nearest, ties away
@@ -117,6 +118,8 @@ Themed factions released over time as content packs; fantasy faction first.
     capture give-up times (mineCaptureGiveUpSeconds 3, mineCaptureRetrySeconds 6; see "Map gold") and the two level
     values (maxUnitLevel 15, levelStatBonusPerLevel 0.06; see "Stat modifiers, levels and leaders").
     The give-up and retry times must be whole ticks; maxUnitLevel is 1-100; levelStatBonusPerLevel is 0-1.
+    rulesVersion (whole number >= 1, added Sept 2026 for replays) must be raised whenever a rules value changes; replays
+    record it. MatchRules.ContentHash fingerprints every value (not tuningPlaceholders) from the parsed data.
     suddenDeathIncomeMultiplier (2) is design data, not a placeholder; base income times it must not
     exceed the gold cap. unitStoppedPushFactor must be 0..1.
     The spawn delay must be a whole number of ticks. handSize must be less than deckSize.
@@ -170,18 +173,68 @@ Themed factions released over time as content packs; fantasy faction first.
     A test pins the hash of a scripted full match on the small test map with fixed inline rules and
     structure stats (it includes kills, projectiles, chest pickups by both players, Fireball casts, a War Cry,
     rejected leader abilities and a Keep kill); change it only on purpose.
-  - Replay = rules + seed + CommandLog (Simulation.Replay). The log is in memory only for now. Replay ignores the
-    setup's bots and feeds the log to two HumanControllers: bot decisions are already in the log.
-  - Replay file format (decided Sept 2026, not implemented yet): compact, versioned binary.
-    Header: replay format version, sim version, content version, rules version, seed, map id (plus
-    the map's content hash), both players' decks (each deck's faction, card ids and the unit
-    level of every card) and both players' structure levels. Body: the command log.
-    Decided Sept 2026: the header must carry the map id, both decks (card ids plus unit levels) and
-    the rules version. rules.json has no version field yet; add one when replays are built.
-    Since Sept 2026 the sim has everything the header needs: Deck.Levels (sorted card order) and
-    MatchSetup.StructureLevels (decided then: structure levels also go in the header, since they change the match).
-    A JSON export of the same data exists for debugging only; the binary file is authoritative
-    (it is what the server verifies).
+  - Replay = rules + seed + CommandLog (Simulation.Replay). Replay ignores the setup's bots and feeds the log to two
+    HumanControllers: bot decisions are already in the log. Replay files: see "Replays".
+  - Match observer: see "Match observer".
+- Replays (sim/NovaFaction.Sim/Replays, Content/ContentLibrary.cs, SimVersion.cs; implemented Sept 2026):
+  - SimVersion.Current (a constant in code, now 1) is the version of the sim's logic. Bump it whenever sim logic changes
+    in a way that can change a match or its hashes (rules code, bots, tick order, hash layout); refactors and tests do
+    not need a bump. Replays only re-run on the same sim version.
+  - Content version (ContentVersion.Compute(setup)) = FNV-1a over the content hashes of everything the match uses: the
+    rules (MatchRules.ContentHash, includes rulesVersion), structures.json, the map, each player's faction (units plus
+    spells) and, per player, whether a bot played and that personality's hash (BotPersonality.ContentHash). All are
+    computed from parsed data like the map's hash, so line endings never matter. Decided Sept 2026: content the match
+    does not use (other maps, other bots) is left out, so adding a map or a bot does not invalidate old replays.
+  - ContentLibrary: all loaded content by id (rules, structures, maps, factions' card catalogs, bots); lookups only,
+    listed collections sorted by id. The caller reads the files (the sim still takes JSON text).
+  - Binary format, version 1 (ReplayWriter, ReplayReader). Little-endian; varint = unsigned LEB128; svarint = zigzag
+    varint; string = varint byte length + UTF-8.
+    Header: magic "NFRP", formatVersion (u16), simVersion (varint), contentVersion (u64), rulesVersion (varint), map id
+    (string), map content hash (u64), seed (u64); per player: faction (string), card count, each card's id (string) and
+    level (varint) in deck order, structure level (varint), bot flag (byte) and the personality id (string) for a bot.
+    Body: command count, then each command in canonical order: tick delta from the previous command (varint), player
+    (byte), sequence (varint), type (byte), hand slot + 1 (varint), target x and y raw Q48.16 (svarint).
+    Footer: final tick (varint; also the log's tick count), final state hash (u64). Nothing may follow.
+    A full 3:00 bot match is under 1 KB (about 40-50 commands).
+  - Replay.FromMatch(sim) records a match as it stands (normally finished; the log is copied).
+    ReplayReader.Read(bytes, content) checks format version, sim version, rules version, that the map exists with the
+    same hash, that decks and bots exist, and the content version; each failure is a ReplayException with a readable
+    message. ReplayReader.Read(bytes) checks only the file and format version, for inspecting old files. Corrupt data
+    never throws anything else and never causes huge allocations (lengths are bounded; a test fuzzes it).
+  - Replay.Verify(content) rebuilds the setup, re-runs the log with HumanControllers and checks the final tick and hash.
+    It never throws for a bad replay: the result says why (tampered command -> hash mismatch; malformed command -> the
+    tick that could not run; match ended early; other sim or content version). The server will use this (M3).
+  - ReplayWriter.ToJson(replay): indented JSON of the same data for debugging (64-bit values as hex strings, positions
+    as exact decimals). Nothing reads it back; the binary file is authoritative.
+- Match observer (sim/NovaFaction.Sim/Observers, implemented Sept 2026):
+  - Simulation.Observer (optional IMatchObserver, may be set or cleared between ticks; HeadlessMatch.Run takes one) hears:
+    card deployed (unit cards), spell cast, leader ability used, unit died (with the killing hit's source), structure
+    damaged (HP actually removed, with source card), structure destroyed, mine captured (new and previous owner), chest
+    collected (unit, gold received, even 0 at the cap), gold accrued (Base, Mine or Chest; only gold actually banked) and
+    match ended (always last, once). Events carry the tick being run (match ended: the match length).
+  - Damage sources: kind (Unit, Structure, Spell, LeaderAbility), attacking player, card id (structure kind for
+    structures) and entity id. Projectiles and ability strikes carry their source; it is not state and not hashed.
+    The killer of a unit is the hit that took it to 0 HP, in the combat hit order.
+  - Observers are never part of the match: events are readonly structs with no live state, calls are synchronous inside
+    Tick(), calling Tick() from an observer throws, and an observer must not throw. Tests check identical per-tick
+    hashes with and without an observer (bot matches, attaching and detaching mid-match, and the pinned scripted match
+    keeps its pinned hash), and that events add up to the final state (gold ledger, score, deaths, structure HP, mine
+    owners, accepted commands).
+- Headless harness (tools/NovaFaction.Harness, implemented Sept 2026): a .NET 10 console app over the sim and the real
+  content/ folder (it may use System.Text.Json and Parallel; the sim may not). Commands: run (one match: timeline,
+  result, per-side and per-card stats, final hash, optional replay file that is verified at once), batch (N matches in
+  parallel: win rates, end reasons, tie-break rules, Keep-kill rate, length and score-margin mean/spread/min/max,
+  per-card deploys, kills, deaths, structure damage per gold, gold by source per side, the income ratio and the
+  active-vs-turtle ratio, mine captures and chests; CSV and JSON in tools/out/), roundrobin (every ordered pairing of
+  personalities, mirrors included, same seeds for every pairing; one table plus overall win rates), determinism (each
+  match played serially with an observer and in parallel without, compared hash by hash after every tick, then saved as
+  a replay, read back and verified), verify and export (replay files). Sides are personality ids or "idle" (a player who
+  never acts). Decks default to the seven fantasy units plus Fireball. tools/out/ is not committed.
+  - Sept 2026 baseline (shipped placeholders, twolane, 50 matches per pairing): every match goes the full 3:00, no Keep
+    kills; overall win rates turtle 68%, balanced 59%, swarm 50%, aggressive 23%. Both sides bank about 73-76 gold per
+    match (about 63 base, 5-10 mines, 1-7 chests), so active and turtle bots earn about the same (ratio about 1.0 against
+    the 1.33 target); the turtle collects the most chests. The aggressive bot never deploys its
+    6-cost warlord (it rarely holds 6 gold).
 - Sim map layer (sim/NovaFaction.Sim/Map):
   - Map files: content/maps/<id>.json with formatVersion (1), id (a-z 0-9 _ -), cellSize (world units
     per cell, 1/16..64), grid, structures, deployZones. Unknown keys are errors.
@@ -632,7 +685,8 @@ Themed factions released over time as content packs; fantasy faction first.
 - Studio name and Android package identifier.
 - Fantasy roster: the 16 units and 2 leaders.
 - Income, cost and match-length numbers (tune in the headless harness).
-- Replay implementation (header decided above): add a rules version field to rules.json.
+- Replays are verified in-process; the server side (M3) still has to store and verify them. Replay files are not
+  forward-compatible: a SimVersion bump makes older replays unplayable (they can still be exported to JSON).
 - Unit levels: the sim scales them (Sept 2026); where they come from (server progression data, league level
   caps) is decided with M3. The level numbers (maxUnitLevel 15, +6% per level) are placeholders.
 - Leader numbers (the warlord passive and War Cry) are placeholders; the second fantasy leader has no passive or
@@ -648,8 +702,9 @@ Themed factions released over time as content packs; fantasy faction first.
 - Combat numbers (structure HP/damage/range, aggro radius, stopped push, crowd penalty) are
   placeholders; with the shipped numbers towers win most fights against a trickle of units. Tune in
   the headless harness.
-- Map gold numbers (all eight rules.json values) are placeholders built on the arithmetic in "Map gold";
-  check in the headless harness that an active bot really earns ~1/3 more than a turtle.
+- Map gold numbers (all eight rules.json values) are placeholders built on the arithmetic in "Map gold". The harness
+  (Sept 2026) shows active bots do not earn more than the turtle (ratio about 1.0, target 1.33); tune the numbers and/or
+  the bots' mine and chest behavior.
 - Units still never walk to a mine or chest on purpose (their objective is always a structure); since
   Sept 2026 capturers stop at mines they happen to pass. The bot deploys capturers toward mines on purpose (Sept 2026); mission design
   must too. Revisit if players find mines hard to hold.
@@ -662,3 +717,5 @@ Themed factions released over time as content packs; fantasy faction first.
   small score difference and rarely by a Keep kill (a lone balanced bot does destroy a passive opponent's Keep). The
   bot does not chase chests, does not predict unit movement when aiming spells, and does not yet read the
   opponent's likely hand. Campaign difficulty knobs (enemy levels, income multiplier) are not wired to bots yet.
+  Harness baseline (Sept 2026): aggressive is the weakest personality (23% overall) and never plays its leader; no
+  pairing produces Keep kills.

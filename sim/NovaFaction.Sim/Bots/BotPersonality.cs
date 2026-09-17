@@ -53,6 +53,9 @@ namespace NovaFaction.Sim.Bots
 
         public bool IsPlaceholder { get; private set; }
 
+        /// <summary>Fingerprint of the parsed values (not the placeholder flag). Part of a replay's content version.</summary>
+        public ulong ContentHash { get; private set; }
+
         /// <summary>Parses and validates a bot file. Throws <see cref="SimJsonException"/> on any problem.</summary>
         public static BotPersonality FromJson(string json, string sourceName = "bot.json")
         {
@@ -67,7 +70,7 @@ namespace NovaFaction.Sim.Bots
             {
                 throw version.Error("formatVersion must be " + FormatVersion + " but is " + version.NumberText + ".");
             }
-            return new BotPersonality
+            var bot = new BotPersonality
             {
                 Id = UnitRoster.ReadId(root),
                 ReactionDelaySeconds = Read(root, "reactionDelaySeconds", Fix.Epsilon, Fix.FromInt(MaxReactionDelaySeconds)),
@@ -79,6 +82,23 @@ namespace NovaFaction.Sim.Bots
                 GoldReserve = Read(root, "goldReserve", Fix.Zero, Fix.FromInt(MaxGoldReserve)),
                 IsPlaceholder = root.TryGet("placeholder", out JsonValue p) && p.AsBool(),
             };
+            bot.ContentHash = bot.ComputeContentHash();
+            return bot;
+        }
+
+        private ulong ComputeContentHash()
+        {
+            var h = new StateHasher();
+            h.Add(FormatVersion);
+            h.Add(Id);
+            h.Add(ReactionDelaySeconds);
+            h.Add(DecisionQuality);
+            h.Add(Aggression);
+            h.Add(Defensiveness);
+            h.Add(MineFocus);
+            h.Add(SpellUsage);
+            h.Add(GoldReserve);
+            return h.Value;
         }
 
         private static Fix Read01(JsonValue root, string key) => Read(root, key, Fix.Zero, Fix.One);

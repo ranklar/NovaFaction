@@ -2,6 +2,7 @@ using System;
 using NovaFaction.Sim.Content;
 using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
+using NovaFaction.Sim.Observers;
 
 namespace NovaFaction.Sim.Combat
 {
@@ -166,6 +167,12 @@ namespace NovaFaction.Sim.Combat
         /// <summary>The attacker's target layer; splash only damages what the attacker could hit.</summary>
         public TargetLayer CanHit { get; }
 
+        /// <summary>
+        /// Who fired it, for <see cref="IMatchObserver"/> statistics. Not match state: it never affects play and is not
+        /// in the hash.
+        /// </summary>
+        internal DamageSource Source { get; set; }
+
         public void AppendHash(ref StateHasher hasher)
         {
             hasher.Add(Id);
@@ -188,6 +195,8 @@ namespace NovaFaction.Sim.Combat
         public Fix Radius;
         public Fix Damage;
         public Fix StructureDamage;
+        /// <summary>The leader card, for observers.</summary>
+        public DamageSource Source;
     }
 
     /// <summary>Why the match ended.</summary>

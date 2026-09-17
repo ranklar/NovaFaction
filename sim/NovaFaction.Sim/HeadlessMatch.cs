@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using NovaFaction.Sim.Combat;
 using NovaFaction.Sim.Commands;
 using NovaFaction.Sim.Controllers;
+using NovaFaction.Sim.Observers;
 
 namespace NovaFaction.Sim
 {
@@ -46,10 +47,12 @@ namespace NovaFaction.Sim
         /// Runs a match to its end. Players the setup gives a bot are played by it; every other player plays
         /// <paramref name="scripted"/> (their commands, each stamped with the tick it runs on), or nothing.
         /// Every match ends: regulation, then at most sudden death, then the tie-break list.
+        /// <paramref name="observer"/> (optional) hears the match's events; see <see cref="Simulation.Observer"/>.
         /// </summary>
-        public static MatchResult Run(MatchSetup setup, ulong seed, IEnumerable<Command>? scripted = null)
+        public static MatchResult Run(MatchSetup setup, ulong seed, IEnumerable<Command>? scripted = null,
+            IMatchObserver? observer = null)
         {
-            var sim = new Simulation(setup, seed);
+            var sim = new Simulation(setup, seed) { Observer = observer };
             if (scripted != null)
             {
                 foreach (Command command in scripted)

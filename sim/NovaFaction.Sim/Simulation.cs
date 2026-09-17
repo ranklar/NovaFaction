@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using NovaFaction.Sim.Bots;
 using NovaFaction.Sim.Cards;
 using NovaFaction.Sim.Combat;
 using NovaFaction.Sim.Commands;
 using NovaFaction.Sim.Content;
+using NovaFaction.Sim.Controllers;
 using NovaFaction.Sim.Economy;
 using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
@@ -20,12 +22,25 @@ namespace NovaFaction.Sim
     public sealed class Simulation
     {
         private readonly CommandLog _log = new CommandLog();
+        private readonly IController[] _controllers = new IController[Command.PlayerCount];
+        private readonly List<Command> _tickCommands = new List<Command>();
 
+        /// <summary>
+        /// A match between the setup's players: a <see cref="BotController"/> for each player the setup gives a bot,
+        /// a <see cref="HumanController"/> (commands from outside) for the others.
+        /// </summary>
         public Simulation(MatchSetup setup, ulong seed)
         {
             Setup = setup ?? throw new ArgumentNullException(nameof(setup));
             Seed = seed;
             State = new MatchState(seed, setup);
+            for (int player = 0; player < _controllers.Length; player++)
+            {
+                BotPersonality? bot = setup.GetBot(player);
+                _controllers[player] = bot != null
+                    ? new BotController(player, bot, seed, State)
+                    : (IController)new HumanController(player);
+            }
         }
 
         public MatchSetup Setup { get; }
@@ -39,12 +54,25 @@ namespace NovaFaction.Sim
 
         public bool IsEnded => State.Phase == MatchPhase.Ended;
 
+        /// <summary>The controller issuing the player's commands.</summary>
+        public IController GetController(int player) => _controllers[MapDefinition.CheckPlayer(player)];
+
+        /// <summary>The player's <see cref="HumanController"/>, or null when a bot plays them.</summary>
+        public HumanController? GetHuman(int player) => GetController(player) as HumanController;
+
+        /// <summary>Advances one tick with only the controllers' commands (see <see cref="Tick(IReadOnlyList{Command})"/>).</summary>
+        public void Tick() => Tick(Array.Empty<Command>());
+
         /// <summary>Hash of the current state.</summary>
         public ulong ComputeHash() => StateHash.Compute(State);
 
         /// <summary>
-        /// Advances one tick. Every command must be stamped with <c>State.Tick</c> and be well-formed
-        /// (see <see cref="Command.Validate"/>); otherwise this throws and the state is unchanged.
+        /// Advances one tick. The tick's commands are <paramref name="commands"/> (outside input, allowed only for players
+        /// with a <see cref="HumanController"/>) plus what each controller adds: first the human controllers' queued
+        /// commands, then each bot's decisions, reading the state as it is before this tick. All of them are recorded in
+        /// <see cref="Log"/>. Every command must be stamped with <c>State.Tick</c> and be well-formed
+        /// (see <see cref="Command.Validate"/>); otherwise this throws and the match state is unchanged (a bot that
+        /// already ran may have advanced its private random stream).
         /// Order of work: apply commands (canonical order; leader abilities act here), create units of zero-delay
         /// deploys, run combat, spells and movement (<see cref="BattleSystem"/>), resolve Keep kills and sudden-death
         /// damage, update mine capture, capture give-ups and chests (<see cref="MapGoldSystem"/>), accrue income (base
@@ -65,15 +93,38 @@ namespace NovaFaction.Sim
             }
 
             // Validate everything before changing any state.
-            for (int i = 0; i < commands.Count; i++)
+            ValidateCommands(commands, nameof(commands));
+            foreach (Command command in commands)
             {
-                string? problem = commands[i].Validate(Rules.HandSize);
-                if (problem != null)
+                if (!(_controllers[command.Player] is HumanController))
                 {
-                    throw new ArgumentException("Invalid command " + commands[i] + ": " + problem, nameof(commands));
+                    throw new ArgumentException("Player " + command.Player + " is played by a bot; outside command "
+                        + command + " is not allowed.", nameof(commands));
                 }
             }
-            _log.Record(State.Tick, commands);
+            List<Command> all = _tickCommands;
+            all.Clear();
+            all.AddRange(commands);
+            foreach (IController controller in _controllers) // humans first: they have no side effects
+            {
+                if (controller is HumanController)
+                {
+                    Collect(controller, all);
+                }
+            }
+            foreach (IController controller in _controllers)
+            {
+                if (!(controller is HumanController))
+                {
+                    Collect(controller, all);
+                }
+            }
+            ValidateCommands(all, nameof(commands));
+            _log.Record(State.Tick, all);
+            foreach (IController controller in _controllers)
+            {
+                (controller as HumanController)?.Acknowledge(State.Tick);
+            }
             IReadOnlyList<Command> ordered = _log.GetCommands(State.Tick);
 
             for (int i = 0; i < ordered.Count; i++)
@@ -106,19 +157,56 @@ namespace NovaFaction.Sim
             }
         }
 
-        /// <summary>Runs a fresh match from a recorded log and returns it.</summary>
+        /// <summary>
+        /// Runs a fresh match from a recorded log and returns it. Both players get <see cref="HumanController"/>s fed
+        /// from the log (bots in the setup are ignored: their decisions are already in the log).
+        /// </summary>
         public static Simulation Replay(MatchSetup setup, ulong seed, CommandLog log)
         {
+            if (setup == null)
+            {
+                throw new ArgumentNullException(nameof(setup));
+            }
             if (log == null)
             {
                 throw new ArgumentNullException(nameof(log));
             }
-            var sim = new Simulation(setup, seed);
+            var sim = new Simulation(setup.WithoutBots(), seed);
+            for (int player = 0; player < Command.PlayerCount; player++)
+            {
+                sim.GetHuman(player)!.SubmitAll(log);
+            }
             for (int tick = 0; tick < log.TickCount; tick++)
             {
-                sim.Tick(log.GetCommands(tick));
+                sim.Tick();
             }
             return sim;
+        }
+
+        private void Collect(IController controller, List<Command> all)
+        {
+            int start = all.Count;
+            controller.AddCommands(State, all);
+            for (int i = start; i < all.Count; i++)
+            {
+                if (all[i].Player != controller.Player)
+                {
+                    throw new InvalidOperationException("Player " + controller.Player
+                        + "'s controller issued a command for another player: " + all[i]);
+                }
+            }
+        }
+
+        private void ValidateCommands(IReadOnlyList<Command> commands, string parameter)
+        {
+            for (int i = 0; i < commands.Count; i++)
+            {
+                string? problem = commands[i].Validate(Rules.HandSize);
+                if (problem != null)
+                {
+                    throw new ArgumentException("Invalid command " + commands[i] + ": " + problem, parameter);
+                }
+            }
         }
 
         private void ApplyCommand(Command command)
@@ -141,6 +229,7 @@ namespace NovaFaction.Sim
         /// <summary>
         /// A deploy is valid when the hand slot holds a card, the player has at least its cost in gold, and the target
         /// is allowed: for a unit card, deployable for the player right now; for a spell card, anywhere on the map.
+        /// A leader card is also refused while that player's leader is alive on the field or waiting to spawn.
         /// Invalid deploys only bump <see cref="PlayerState.IgnoredDeploys"/>. A valid deploy pays, cycles the hand and
         /// queues the spawn or the spell.
         /// </summary>
@@ -150,7 +239,8 @@ namespace NovaFaction.Sim
             bool targetOk = card is SpellDefinition
                 ? IsOnMap(command.Target)
                 : State.Map.IsDeployable(player.Index, command.Target);
-            if (card == null || player.Gold < Fix.FromInt(card.Cost) || !targetOk)
+            if (card == null || player.Gold < Fix.FromInt(card.Cost) || !targetOk
+                || (card.IsLeader && State.HasLeaderOnField(player.Index)))
             {
                 player.IgnoredDeploys++;
                 return;

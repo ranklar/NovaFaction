@@ -25,6 +25,7 @@
     <None Include="..\..\content\maps\*.json" Link="content\maps\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\content\factions\fantasy\units.json" Link="content\factions\fantasy\units.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\content\factions\fantasy\spells.json" Link="content\factions\fantasy\spells.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\content\bots\*.json" Link="content\bots\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

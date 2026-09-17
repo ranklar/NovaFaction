@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using NovaFaction.Sim.Bots;
 using NovaFaction.Sim.Cards;
 using NovaFaction.Sim.Content;
 using NovaFaction.Sim.Map;
@@ -9,13 +10,14 @@ namespace NovaFaction.Sim
 {
     /// <summary>
     /// Everything fixed before a match starts, apart from the seed: rules, map, structure stats, both decks (with
-    /// card levels) and each player's structure level. Each deck carries its own faction roster, so the two players
-    /// may use different factions.
+    /// card levels), each player's structure level and, optionally, a bot personality per player (<see cref="WithBot"/>).
+    /// Each deck carries its own faction roster, so the two players may use different factions.
     /// </summary>
     public sealed class MatchSetup
     {
         private readonly Deck[] _decks;
         private readonly int[] _structureLevels;
+        private readonly BotPersonality?[] _bots = new BotPersonality?[2];
 
         public MatchSetup(MatchRules rules, MapDefinition map, StructureCatalog structures, Deck deck0, Deck deck1,
             int structureLevel0 = 1, int structureLevel1 = 1)
@@ -79,6 +81,42 @@ namespace NovaFaction.Sim
         public IReadOnlyList<int> StructureLevels => _structureLevels;
 
         public int GetStructureLevel(int player) => _structureLevels[MapDefinition.CheckPlayer(player)];
+
+        /// <summary>
+        /// Each player's bot personality, or null for a player whose commands come from outside (a
+        /// <see cref="Controllers.HumanController"/>). A new <see cref="Simulation"/> builds its controllers from this.
+        /// </summary>
+        public IReadOnlyList<BotPersonality?> Bots => _bots;
+
+        public BotPersonality? GetBot(int player) => _bots[MapDefinition.CheckPlayer(player)];
+
+        /// <summary>A copy of this setup with the player controlled by a bot (or by outside commands when null).</summary>
+        public MatchSetup WithBot(int player, BotPersonality? personality)
+        {
+            MapDefinition.CheckPlayer(player);
+            if (personality != null && !Rules.IsWholeTicks(personality.ReactionDelaySeconds))
+            {
+                throw new ArgumentException("Bot \"" + personality.Id + "\": reactionDelaySeconds must be a whole number "
+                    + "of ticks (a multiple of 1/" + Rules.TicksPerSecond + " s).");
+            }
+            var copy = new MatchSetup(this);
+            copy._bots[player] = personality;
+            return copy;
+        }
+
+        /// <summary>A copy with both players controlled from outside (what a replay uses).</summary>
+        public MatchSetup WithoutBots() => WithBot(0, null).WithBot(1, null);
+
+        private MatchSetup(MatchSetup other)
+        {
+            Rules = other.Rules;
+            Map = other.Map;
+            Structures = other.Structures;
+            _decks = other._decks;
+            _structureLevels = other._structureLevels;
+            _bots[0] = other._bots[0];
+            _bots[1] = other._bots[1];
+        }
 
         /// <summary>
         /// Movement checks walkability only at the destination of each step, so a step must stay well

@@ -77,7 +77,7 @@ public class DeterminismTests
     /// match. (Structure damage and destruction have their own tests.)
     /// </summary>
     [Theory]
-    [InlineData(2024UL)]
+    [InlineData(2025UL)] // was 2024 until Sept 2026: with the leader redeploy block that script ends with only 3 survivors
     [InlineData(6UL)] // was 5 until Sept 2026: with leader buffs that script ends with only 4 survivors (none stuck)
     [InlineData(7UL)]
     public void BusyScriptedBattle_HashesIdenticallyEveryTick_AndEndsWithNoStuckUnits(ulong inputSeed)

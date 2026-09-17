@@ -30,6 +30,9 @@ Themed factions released over time as content packs; fantasy faction first.
   the match seed, then loops.
 - Leader deploys like a unit; carries the faction passive and an active ability on cooldown
   (implemented Sept 2026; see "Stat modifiers, levels and leaders").
+- One leader at a time (decided and implemented Sept 2026): a player's leader card cannot be deployed while that
+  player's leader is alive on the field or waiting out its spawn delay. The deploy is silently ignored and counted
+  (IgnoredDeploys), like any other rejected deploy.
 - 1s spawn delay on deploy. Deploy zones are map data (own side + around held structures).
 
 ## Maps
@@ -87,7 +90,7 @@ Themed factions released over time as content packs; fantasy faction first.
 ## Technical architecture
 - client/: Unity 6.3 LTS, URP, Android first. Renders sim state; no game rules in Unity code.
 - sim/: netstandard2.1 C# library. Deterministic: fixed-point math, seeded RNG, fixed 20 ticks/s,
-  flow-field pathfinding on a grid. Headless bot-vs-bot harness; per-tick state hash for
+  flow-field pathfinding on a grid. Headless bot-vs-bot harness (HeadlessMatch; see "Controllers and bots"); per-tick state hash for
   cross-platform determinism checks. No Unity references.
 - Sim numerics (sim/NovaFaction.Sim):
   - Fix = Q48.16 fixed point (long raw, 1.0 = 65536). + - * / saturate at MaxValue/MinValue
@@ -125,10 +128,12 @@ Themed factions released over time as content packs; fantasy faction first.
     LeaderAbility), hand slot (-1 when unused), target. Canonical order: tick, player, sequence.
     Malformed commands (bad player/slot/type, wrong tick, duplicate player+sequence) make Tick()
     throw with state unchanged; they are input-layer bugs, not gameplay. Game-rule rejections
-    (empty hand slot, not enough gold, target not deployable) are deterministic no-ops that only
+    (empty hand slot, not enough gold, target not deployable, a leader card while that player's leader is on the field or
+    pending) are deterministic no-ops that only
     increase the player's IgnoredDeploys counter, which is in the state hash. A rejected LeaderAbility
     (see "Stat modifiers, levels and leaders") likewise only increases IgnoredAbilities.
-  - Simulation.Tick(commands) order: validate, record in the CommandLog, apply commands in
+  - Simulation.Tick(commands) order: validate the outside commands, collect each controller's commands (see
+    "Controllers and bots"), validate all, record them in the CommandLog, apply commands in
     canonical order (leader Heal and Rally act here), create units of zero-delay deploys, combat, spells and
     movement (see "Combat and match resolution" and "Spells"), resolve Keep kills and sudden-death damage, mine
     capture, capture give-ups, then chest collection (see "Map gold"), accrue income (base plus mines, multiplied
@@ -137,7 +142,8 @@ Themed factions released over time as content packs; fantasy faction first.
     Tick N's commands must be stamped N (State.Tick before the call). A 3:00 match is 3600 ticks.
   - A match is built from a MatchSetup (rules, map, structure stats, player 0's deck, player 1's deck, and
     optionally each player's structure level, default 1) plus the seed:
-    new Simulation(setup, seed); Simulation.Replay(setup, seed, log). Each deck carries its own
+    new Simulation(setup, seed); Simulation.Replay(setup, seed, log). MatchSetup.WithBot(player, personality) returns a copy
+    in which that player is a bot (see "Controllers and bots"). Each deck carries its own
     faction roster, so the two players may later bring different factions.
   - Income is exact: each tick adds income/ticksPerSecond with the sub-raw remainder carried per
     player, so a player gains exactly the per-second income every whole second. Base income and mine
@@ -164,7 +170,8 @@ Themed factions released over time as content packs; fantasy faction first.
     A test pins the hash of a scripted full match on the small test map with fixed inline rules and
     structure stats (it includes kills, projectiles, chest pickups by both players, Fireball casts, a War Cry,
     rejected leader abilities and a Keep kill); change it only on purpose.
-  - Replay = rules + seed + CommandLog (Simulation.Replay). The log is in memory only for now.
+  - Replay = rules + seed + CommandLog (Simulation.Replay). The log is in memory only for now. Replay ignores the
+    setup's bots and feeds the log to two HumanControllers: bot decisions are already in the log.
   - Replay file format (decided Sept 2026, not implemented yet): compact, versioned binary.
     Header: replay format version, sim version, content version, rules version, seed, map id (plus
     the map's content hash), both players' decks (each deck's faction, card ids and the unit
@@ -538,8 +545,74 @@ Themed factions released over time as content packs; fantasy faction first.
       radius takes the damage and every enemy structure whose footprint is in radius takes damage *
       structureDamageMultiplier (scores, destroys, counts as sudden-death damage).
     - Heal and areaDamage amounts scale with the leader card's level factor (decided Sept 2026).
-  - Two copies of the leader can be on the field if the card cycles round while the first is alive; the cooldown
-    is per player, so that gives no extra casts.
+  - Only one leader per player can be on the field (see "Match rules"; changed Sept 2026, a second copy used to be
+    allowed when the card cycled round while the first was alive). The cooldown is per player either way.
+- Controllers and bots (sim/NovaFaction.Sim/Controllers, Bots, HeadlessMatch.cs; implemented Sept 2026):
+  - IController (Player, AddCommands(state, output)) supplies one player's commands. Simulation builds one per player
+    from the MatchSetup: a BotController for a player given a bot personality, otherwise a HumanController.
+  - HumanController: commands from outside (touch, network, script, replay). Submit(command) queues a command for its
+    tick; SubmitAll(log) queues a player's whole recorded log. Queued commands stay queued until their tick has run,
+    so a Tick() that throws loses nothing; a queued command for a tick that already ran makes Tick() throw.
+  - Simulation.Tick() / Tick(commands): outside commands (the old path) are still allowed, but only for players with a
+    HumanController (for a bot player they are an input-layer error). Then human controllers add their queued
+    commands, then bots decide (player order), all reading the state at the start of the tick. Everything goes into
+    the CommandLog and is applied in canonical order as before, so bot matches replay from the log alone.
+    Controllers are not match state and are not in the state hash; their effects are (through the commands).
+  - HeadlessMatch.Run(setup, seed, scripted commands?) runs a match to its end and returns a MatchResult (winner, end
+    reason, tie-break rule, ticks, final hash, the Simulation and its log). Scripted commands go to the human players;
+    one for a bot player is an error. A full 3-minute bot-vs-bot match on twolane takes about 0.2 s (Debug build,
+    Sept 2026); a test requires under 2 s.
+  - Bot personalities: content/bots/<id>.json with formatVersion (1), id, reactionDelaySeconds (above 0, at most 10,
+    whole ticks, checked by MatchSetup.WithBot), decisionQuality, aggression, defensiveness, mineFocus, spellUsage (all
+    0..1), goldReserve (0..1000), optional placeholder. Unknown keys are errors. Shipped (all placeholders):
+    balanced (0.75 s, quality 0.8, aggression 0.5, defensiveness 0.5, mines 0.4, spells 0.5, reserve 2), aggressive
+    (0.5 s, 0.8, 0.9, 0.3, 0.2, 0.6, 0), turtle (1 s, 0.8, 0.15, 0.9, 0.2, 0.4, 5), swarm (0.5 s, 0.7, 0.7, 0.4, 0.7,
+    0.3, 1).
+  - Bot randomness (decided Sept 2026): each bot has its own SimRandom seeded with a SplitMix64 finalizer of
+    (match seed + golden-ratio constant * (player + 1)). It never touches the match RNG.
+  - Decision loop (decided Sept 2026): the bot decides on tick 0 and then every reactionDelaySeconds (the delay is the
+    decision period, not a perception lag). Each decision scores candidate card actions and plays at most one, then
+    scores ability actions and uses at most one. With probability decisionQuality it takes the best score, otherwise
+    one of the top three (by score, ties in generation order) at random. Before issuing it re-checks the sim's rules
+    (gold, hand slot, deploy zone or map bounds, leader already on the field, ability cooldown and leader range), so a
+    bot never has a command rejected.
+  - What the bot sees: units, pending deploys (both players'; a drop is visible while it spawns), structures, mines,
+    its own hand and gold. "Own half" = closer to its own Keep's footprint center than to the enemy Keep's.
+  - Unit value (the bot's currency for threats and spells) = card cost / spawn count, times hp / max hp for units on the
+    field (a pending deploy counts at full value).
+  - (a) Threats: enemy units and pending deploys on the bot's half, grouped by the nearest standing own structure.
+    Own units able to fight units (targetPriority any) and own pending deploys within 4 of a group's value-weighted
+    center count against it. (b) Defense: a group whose net value is at least 0.5 + 4 * (1 - defensiveness) is answered
+    with a unit card from the hand that the bot can pay for (the reserve may be spent on defense). Matchups:
+    structuresOnly cards never defend; cards that cannot hit air are skipped against mostly-flyer groups; bonuses for
+    anti-air against flyers, splash against swarms (spawn count 3+ or swarm slot), damage per second against tanks (tank
+    slot or max hp 1000+), and fast melee (speed 1.25+) against a lone ranged unit. Melee drops halfway from the
+    structure's nearest footprint point to the group center, ranged a quarter of the way; the nearest deployable point is
+    used when that spot is not deployable.
+  - (c) Attack: lanes are the enemy forward towers; a lane holds its tower and the enemy Keep, and the lane with the
+    smallest share of its hp left is pushed (target: its tower while it stands, else the Keep). Attack waves drop on the
+    deployable cell nearest the target, preferring cells at least 1 outside every standing enemy structure's range. If an
+    own tank (tank slot or max hp 1000+, so the warlord counts) is already pushing that lane, other cards drop 2 behind
+    it; otherwise a tank card leads, and other cards lead with a lower score that grows with aggression. Attacks keep
+    goldReserve plus 3 * (1 - aggression) gold in hand, but a bot at the gold cap always may spend.
+  - (d) Mines: with mineFocus above 0, the cheapest capture-capable non-leader card in hand is dropped on the deployable
+    cell nearest to each mine the bot does not own, unless an own capturer (on the field or pending) is within 6 of it.
+    On twolane no deploy cell touches a mine, so this sends the capturer down that mine's lane and it stops as it passes
+    (see "Capture behavior"). Keeps goldReserve.
+  - (e) Spells: every enemy unit the spell can hit, every enemy structure it can hurt, and the value-weighted center of
+    what each such candidate hits are tried as aim points. Value = for each enemy unit in radius its unit value times the
+    share of its hp the spell removes (all pulses, level scaled; at most 1), plus 8 per enemy structure the spell would
+    destroy, or 100 per enemy structure in radius during sudden death (first damage wins). It casts when the value
+    exceeds cost * (1.5 - spellUsage). A cast on its own half ranks above a unit drop for the same threat (it may use the
+    reserve); elsewhere it keeps the reserve and ranks with attacks.
+  - (f) Leader ability, only with a living leader and the cooldown over. Rally: at an enemy structure with at least 3 own
+    units targeting it or within 3 of it, aimed at their center (pulled toward the leader to within its range), used if
+    at least 3 own units are inside the radius. Heal: where the most missing hp (at most one heal amount per unit) is in
+    radius, if that is at least two heal amounts. AreaDamage: valued like a spell, used above 3 * (1.5 - spellUsage).
+  - (g) Sudden death: all in. goldReserve and the attack wait drop to 0, aggression counts as 1, mine drops stop, and
+    spells and AreaDamage aim at enemy structures. Defense works as usual.
+  - Brain constants (thresholds, utilities, radii above) are code in BotController, not content: they are how the bot
+    thinks, not game balance. Move them to data if tuning needs it.
 - server/: ASP.NET Core (C#). Accounts, economy, matchmaking, input relay, match verification by
   re-running the sim. PostgreSQL. Runs on the Windows desktop for LAN testing; cloud container later.
 - content/: JSON data for units, factions, maps, missions. Art in Addressables bundles per theme.
@@ -563,12 +636,12 @@ Themed factions released over time as content packs; fantasy faction first.
 - Unit levels: the sim scales them (Sept 2026); where they come from (server progression data, league level
   caps) is decided with M3. The level numbers (maxUnitLevel 15, +6% per level) are placeholders.
 - Leader numbers (the warlord passive and War Cry) are placeholders; the second fantasy leader has no passive or
-  ability yet. The bot does not use leader abilities yet. The client can show the cooldown from
+  ability yet. The client can show the cooldown from
   PlayerState.AbilityReadyTick and buffs from Unit.Buff.
 - Enemy units do not block or push each other (decided to leave as is with combat; revisit if fights
   look wrong on the phone).
 - Spell numbers (cost, radius, damage, delays, the 0.35 structure multiplier) are placeholders; tune in the
-  headless harness. The bot does not cast spells yet. Spells have no travel visual data yet (the client can
+  headless harness. Spells have no travel visual data yet (the client can
   animate the cast delay from PendingSpells' land tick).
 - Keep activation: the Keep shoots from the start. Clash Royale only wakes the king tower once it is
   hit or a tower falls; decide when tuning.
@@ -578,9 +651,14 @@ Themed factions released over time as content packs; fantasy faction first.
 - Map gold numbers (all eight rules.json values) are placeholders built on the arithmetic in "Map gold";
   check in the headless harness that an active bot really earns ~1/3 more than a turtle.
 - Units still never walk to a mine or chest on purpose (their objective is always a structure); since
-  Sept 2026 capturers stop at mines they happen to pass. The bot, and later mission design, must deploy
-  toward mines on purpose. Revisit if players find mines hard to hold.
+  Sept 2026 capturers stop at mines they happen to pass. The bot deploys capturers toward mines on purpose (Sept 2026); mission design
+  must too. Revisit if players find mines hard to hold.
 - Capture give-up (Sept 2026) replaced the old "held at a contested mine for good" behavior; its 3 s / 6 s
   times are placeholders to tune in the headless harness.
 - Crowding at structures (fixed Sept 2026 with the weak stopped push and sideways slide): a busy
   scripted battle test requires that every living unit is Attacking or Holding at the end.
+- Bot (Sept 2026): personality values and the brain constants are placeholders; tune them in the headless harness.
+  Bot vs bot on the shipped numbers is close to a stalemate: towers win most fights, so matches usually end on a
+  small score difference and rarely by a Keep kill (a lone balanced bot does destroy a passive opponent's Keep). The
+  bot does not chase chests, does not predict unit movement when aiming spells, and does not yet read the
+  opponent's likely hand. Campaign difficulty knobs (enemy levels, income multiplier) are not wired to bots yet.

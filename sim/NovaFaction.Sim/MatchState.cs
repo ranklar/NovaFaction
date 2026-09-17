@@ -287,6 +287,29 @@ namespace NovaFaction.Sim
             return -1;
         }
 
+        /// <summary>
+        /// True while the player's leader is alive on the field (Spawning counts) or a deploy of it is waiting out its
+        /// spawn delay. A leader card cannot be deployed then.
+        /// </summary>
+        public bool HasLeaderOnField(int player)
+        {
+            foreach (Unit unit in _units)
+            {
+                if (unit.Owner == player && unit.Definition.IsLeader && unit.IsAlive)
+                {
+                    return true;
+                }
+            }
+            foreach (PendingSpawn spawn in _pendingSpawns)
+            {
+                if (spawn.Owner == player && spawn.Definition.IsLeader)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         /// <summary>Creates a unit at the given card level with its owner's leader passive applied.</summary>
         internal Unit AddUnit(int owner, UnitDefinition definition, FixVector2 position, int level = 1)
         {

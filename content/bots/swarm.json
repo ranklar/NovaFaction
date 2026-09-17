@@ -1,0 +1,12 @@
+{
+  "formatVersion": 1,
+  "id": "swarm",
+  "reactionDelaySeconds": 0.5,
+  "decisionQuality": 0.7,
+  "aggression": 0.7,
+  "defensiveness": 0.4,
+  "mineFocus": 0.7,
+  "spellUsage": 0.3,
+  "goldReserve": 1,
+  "placeholder": true
+}

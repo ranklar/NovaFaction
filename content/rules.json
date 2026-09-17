@@ -8,8 +8,14 @@
   "deploySpawnDelaySeconds": 1,
   "handSize": 4,
   "deckSize": 8,
+  "unitSeparationDistance": 0.6,
+  "unitSeparationPushPerSecond": 1.5,
+  "unitSpawnSpacing": 0.5,
   "tuningPlaceholders": [
     "goldBaseIncomePerSecond",
-    "goldStartingAmount"
+    "goldStartingAmount",
+    "unitSeparationDistance",
+    "unitSeparationPushPerSecond",
+    "unitSpawnSpacing"
   ]
 }

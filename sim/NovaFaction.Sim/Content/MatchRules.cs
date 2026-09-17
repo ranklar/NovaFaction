@@ -26,6 +26,9 @@ namespace NovaFaction.Sim.Content
         private const string KeyDeploySpawnDelaySeconds = "deploySpawnDelaySeconds";
         private const string KeyHandSize = "handSize";
         private const string KeyDeckSize = "deckSize";
+        private const string KeyUnitSeparationDistance = "unitSeparationDistance";
+        private const string KeyUnitSeparationPushPerSecond = "unitSeparationPushPerSecond";
+        private const string KeyUnitSpawnSpacing = "unitSpawnSpacing";
         private const string KeyTuningPlaceholders = "tuningPlaceholders";
 
         private static readonly string[] RequiredKeys =
@@ -33,6 +36,7 @@ namespace NovaFaction.Sim.Content
             KeyTicksPerSecond, KeyMatchLengthSeconds, KeySuddenDeathSeconds,
             KeyGoldBaseIncomePerSecond, KeyGoldStartingAmount, KeyGoldCap,
             KeyDeploySpawnDelaySeconds, KeyHandSize, KeyDeckSize,
+            KeyUnitSeparationDistance, KeyUnitSeparationPushPerSecond, KeyUnitSpawnSpacing,
         };
 
         private MatchRules()
@@ -50,6 +54,12 @@ namespace NovaFaction.Sim.Content
         public Fix DeploySpawnDelaySeconds { get; private set; }
         public int HandSize { get; private set; }
         public int DeckSize { get; private set; }
+        /// <summary>Friendly units closer than this (world units, center to center) push each other apart.</summary>
+        public Fix UnitSeparationDistance { get; private set; }
+        /// <summary>Largest speed (world units per second) the separation push adds to a moving unit.</summary>
+        public Fix UnitSeparationPushPerSecond { get; private set; }
+        /// <summary>Distance between neighbors in the spawn pattern of a multi-unit card (world units).</summary>
+        public Fix UnitSpawnSpacing { get; private set; }
         /// <summary>Keys whose values are placeholders awaiting tuning, in file order.</summary>
         public IReadOnlyList<string> TuningPlaceholders { get; private set; }
 
@@ -93,6 +103,9 @@ namespace NovaFaction.Sim.Content
                 DeploySpawnDelaySeconds = MinFix(root, KeyDeploySpawnDelaySeconds, Fix.Zero),
                 HandSize = RangeInt(root, KeyHandSize, 1, 64),
                 DeckSize = RangeInt(root, KeyDeckSize, 1, 64),
+                UnitSeparationDistance = MinFix(root, KeyUnitSeparationDistance, Fix.Epsilon),
+                UnitSeparationPushPerSecond = MinFix(root, KeyUnitSeparationPushPerSecond, Fix.Zero),
+                UnitSpawnSpacing = MinFix(root, KeyUnitSpawnSpacing, Fix.Zero),
             };
 
             // Cross-field rules.
@@ -117,6 +130,14 @@ namespace NovaFaction.Sim.Content
             {
                 throw root.Get(KeyDeploySpawnDelaySeconds).Error(
                     "deploySpawnDelaySeconds must be a whole number of ticks (a multiple of 1/ticksPerSecond).");
+            }
+
+            foreach (string key in new[] { KeyUnitSeparationDistance, KeyUnitSeparationPushPerSecond, KeyUnitSpawnSpacing })
+            {
+                if (root.Get(key).AsFix() > Fix.FromInt(64))
+                {
+                    throw root.Get(key).Error(key + " must be at most 64.");
+                }
             }
 
             if (root.TryGet(KeyTuningPlaceholders, out JsonValue placeholders))

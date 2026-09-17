@@ -100,9 +100,10 @@ Themed factions released over time as content packs; fantasy faction first.
     exactly one draw. Changing the algorithm breaks saved replays; a test pins reference output.
 - Sim match loop (sim/NovaFaction.Sim):
   - content/rules.json holds match-wide rules (tick rate, clock, sudden death, gold income/start/cap,
-    spawn delay, hand and deck size). Every key is required; unknown keys are errors. JSON has no
-    comments, so values that are still guesses are listed by name in "tuningPlaceholders".
-    Current placeholders: base income 0.35 gold/s (about Clash Royale's pace) and 5 starting gold.
+    spawn delay, hand and deck size, unit separation and spawn spacing). Every key is required;
+    unknown keys are errors. JSON has no comments, so values that are still guesses are listed by
+    name in "tuningPlaceholders". Current placeholders: base income 0.35 gold/s (about Clash Royale's
+    pace), 5 starting gold, and the three unit movement values (see "Units, decks and movement").
     The spawn delay must be a whole number of ticks. handSize must be less than deckSize.
   - SimJson: strict RFC 8259 reader, no dependencies. Numbers stay as text until read as int/long or
     Fix (exponents are valid JSON but rejected as Fix). Errors carry file name, line and column.
@@ -112,21 +113,33 @@ Themed factions released over time as content packs; fantasy faction first.
     LeaderAbility), hand slot (-1 when unused), target. Canonical order: tick, player, sequence.
     Malformed commands (bad player/slot/type, wrong tick, duplicate player+sequence) make Tick()
     throw with state unchanged; they are input-layer bugs, not gameplay. Game-rule rejections
-    (not enough gold, outside deploy zone) will be deterministic no-ops when those features land.
+    (empty hand slot, not enough gold, target not deployable) are deterministic no-ops that only
+    increase the player's IgnoredDeploys counter, which is in the state hash.
   - Simulation.Tick(commands) order: validate, record in the CommandLog, apply commands in
-    canonical order, accrue income, advance tick and clock, handle clock expiry.
+    canonical order, create units of zero-delay deploys, move units, accrue income, advance tick and
+    clock, create units whose spawn delay is over, handle clock expiry.
     Tick N's commands must be stamped N (State.Tick before the call). A 3:00 match is 3600 ticks.
+  - A match is built from a MatchSetup (rules, map, player 0's deck, player 1's deck) plus the seed:
+    new Simulation(setup, seed); Simulation.Replay(setup, seed, log). Each deck carries its own
+    faction roster, so the two players may later bring different factions.
   - Income is exact: each tick adds income/ticksPerSecond with the sub-raw remainder carried per
     player, so a player gains exactly the per-second income every whole second. At the cap the
     carry is discarded (a capped player banks nothing).
   - Clock expiry: Regulation -> Ended for now. Scoring, sudden death and Keep kills are TODO.
   - State hash: 64-bit FNV-1a over little-endian bytes, starting with a hash format version.
     Covers tick, RNG state, clock, phase, and per player: gold raw, income carry, score, command
-    count. New state implements IStateHashable and appends count-then-items in id order.
+    count, ignored deploys, the deck's unit-data content hash, hand slots and draw queue. Then the
+    map, the next unit id, every unit (id order: id, owner, card id, position, hp, state, objective)
+    and every pending spawn (deploy order). Hash format version is 3.
+    New state implements IStateHashable and appends count-then-items in id order.
     A test pins the hash of a scripted full match; change it only on purpose.
   - Replay = rules + seed + CommandLog (Simulation.Replay). The log is in memory only for now.
   - Replay file format (decided Sept 2026, not implemented yet): compact, versioned binary.
-    Header: replay format version, sim version, content version, seed. Body: the command log.
+    Header: replay format version, sim version, content version, rules version, seed, map id (plus
+    the map's content hash), and both players' decks: each deck's faction, card ids and the unit
+    level of every card. Body: the command log.
+    Decided Sept 2026: the header must carry the map id, both decks (card ids plus unit levels) and
+    the rules version. rules.json has no version field yet; add one when replays are built.
     A JSON export of the same data exists for debugging only; the binary file is authoritative
     (it is what the server verifies).
 - Sim map layer (sim/NovaFaction.Sim/Map):
@@ -171,6 +184,64 @@ Themed factions released over time as content packs; fantasy faction first.
     one mine at the inner edge of each gap (one on each side of the center line), two chest spawns
     per lane, base deploy zones = each player's 13 rows nearest their Keep, tower unlocks = a 9x6
     block in front of the fallen tower's half of the field.
+- Units, decks and movement (sim/NovaFaction.Sim/Content, Cards, Units):
+  - Unit files: content/factions/<faction>/units.json with formatVersion (1), faction (id), units.
+    Each unit: id (a-z 0-9 _ -, unique in the file), displayName, slot (tank, bruiser, swarm, ranged,
+    flyer, siege, support, spell, building, leader), cost (whole number 1-7), hp (> 0), damage (>= 0),
+    attackIntervalSeconds (> 0), range (> 0), moveSpeed (>= 0), targets (ground, air, both), isFlying,
+    spawnCount (1-25), isLeader (must be true exactly when slot is leader). Optional
+    "placeholder": true marks numbers that are guesses. Unknown keys are errors. The file's content
+    hash (from parsed data) is part of the state hash.
+  - content/factions/fantasy/units.json: 8 placeholder units, one per requested job: stone_golem
+    (tank), knight (bruiser), goblin_pack (swarm of 4), elf_archer (ranged), griffin (flyer),
+    catapult (siege), fire_spirit (spell stand-in, a fast 1 HP unit until real spells exist) and
+    warlord (leader). Every number is a placeholder.
+  - Range is measured from the unit's center to the nearest point of the target's footprint, so
+    melee units use a small positive range (0.5).
+  - Deck: exactly deckSize (8) different card ids from one roster, exactly one of them a leader
+    (no duplicate cards). Stored sorted by id, so the order a player lists cards never matters.
+    Unit levels are not part of the deck yet; they arrive with progression and belong in the replay
+    header.
+  - Hand: at match start player 0's deck is shuffled with the match RNG, then player 1's. The first
+    handSize cards are the hand (slots 0-3), the rest the queue; the front of the queue is the
+    visible next card. Playing a slot puts the next card into that slot and the played card at the
+    back of the queue. Slots are never empty under current rules; the sim supports an empty slot
+    (deploys from it are rejected) for future rules.
+  - Deploy: valid when the slot holds a card, gold >= cost, and the target is deployable for that
+    player now (base or unlocked zones, walkable cell). Commands apply in canonical order, so a
+    second deploy in the same tick sees the gold the first one spent. A valid deploy pays, cycles
+    the hand and queues a pending spawn for deploy tick + delay ticks. With a delay of D > 0 ticks the
+    units are in the state once State.Tick reaches deploy tick + D, in the Spawning state, unmoved.
+    With D = 0 they appear during the deploy tick and move on it. The spawn delay must be a whole
+    number of ticks that Q48.16 can represent exactly (0.25 s works, 0.05 s does not).
+  - Spawn pattern: square spiral in steps of unitSpawnSpacing (0.5): center, front, left, right,
+    back, then the diagonals, then the next ring. Rotated 180 degrees for player 1 so both players'
+    formations face the enemy the same way. A position on a blocked cell moves to the nearest
+    walkable cell center within 3 cells (ties: lower row, then left), else to the deploy target.
+  - Units: id (from 1, never reused), owner, card, position, hp (max, untouched until combat), state
+    (Spawning, Moving, Holding) and objective (structure index or none). Stored in id order.
+    The client reads MatchState.Units, PendingSpawns and each player's Cards (Hand, NextCard, Queue);
+    only the sim can change them.
+  - Movement runs in two passes so update order cannot matter: every unit decides state, objective
+    and velocity from the positions at the start of the tick, then moving units step.
+    - Spawning units become Moving on their first tick. Holding units stay put until their objective
+      is destroyed, then become Moving and pick a new one the same tick.
+    - Moving units re-pick their objective every tick: the nearest standing enemy structure by
+      flow-field path distance (ground) or by straight-line distance to the footprint (flyers).
+      Ties go to the lower structure index. No structure left: Holding with no objective.
+    - Within range of the objective (before or after the step): Holding.
+    - Ground direction: bilinear blend of the flow directions of the 4 cells around the unit,
+      leaving out blocked cells and cells whose path cost differs from the unit's own cell by more
+      than 2 (the other side of a wall); falls back to the unit's own cell direction.
+    - Flyers fly straight at the footprint center, ignore terrain and are kept inside the map.
+    - Separation: each friendly unit of the same layer (ground or air) closer than
+      unitSeparationDistance (0.6) pushes by (distance short / separation distance) along the line
+      between them; the sum is capped at 1 and scaled by unitSeparationPushPerSecond (1.5). Two units
+      on exactly the same point split along X, lower id to the left. Enemies do not push yet.
+    - Speed: velocity = direction * moveSpeed + push, divided by the tick rate per step.
+    - Ground step: take the full step if it lands on a walkable cell without cutting a blocked
+      corner; otherwise the pure flow step (always open); otherwise stay. MatchSetup rejects content
+      where moveSpeed + push would exceed half a cell per tick, which keeps these checks sound.
 - server/: ASP.NET Core (C#). Accounts, economy, matchmaking, input relay, match verification by
   re-running the sim. PostgreSQL. Runs on the Windows desktop for LAN testing; cloud container later.
 - content/: JSON data for units, factions, maps, missions. Art in Addressables bundles per theme.
@@ -190,8 +261,12 @@ Themed factions released over time as content packs; fantasy faction first.
 - Studio name and Android package identifier.
 - Fantasy roster: the 16 units and 2 leaders.
 - Income, cost and match-length numbers (tune in the headless harness).
-- Replay header: besides format/sim/content version and seed, a replay must also name the map
-  (id + content hash) and both players' decks and unit levels. Decide when replays are built.
+- Replay implementation (header decided above): add a rules version field to rules.json.
+- Unit levels: where they come from and how they scale stats (~5-7% per level) in the sim.
 - Structure HP and damage score live with combat (next); the map layer only tracks destroyed/standing.
-- Unit movement: flow-field directions are 8-way per cell; smoothing and unit separation are
-  movement-layer decisions.
+- Crowding at a structure: melee units that arrive behind friends already Holding at the same
+  structure are pushed back by them and can stall a few tenths short of range, staying Moving
+  without advancing (seen in a busy scripted 3-minute match). Decide with combat: e.g. weaker push
+  from Holding units (soft collision) or re-targeting to nearby enemy units.
+- Enemy units do not block or push each other yet (combat session).
+- Real spells: fire_spirit stands in for the spell slot as a unit.

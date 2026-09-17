@@ -15,7 +15,10 @@ public class MatchRulesTests
   ""goldCap"": 10,
   ""deploySpawnDelaySeconds"": 1,
   ""handSize"": 4,
-  ""deckSize"": 8
+  ""deckSize"": 8,
+  ""unitSeparationDistance"": 0.6,
+  ""unitSeparationPushPerSecond"": 1.5,
+  ""unitSpawnSpacing"": 0.5
 }".Replace("\r\n", "\n");
 
     internal static string ContentPath(string fileName) =>
@@ -45,7 +48,12 @@ public class MatchRulesTests
         Assert.Equal(20, rules.DeploySpawnDelayTicks);
 
         // Values the design doc does not set are flagged in the file.
-        Assert.Equal(new[] { "goldBaseIncomePerSecond", "goldStartingAmount" }, rules.TuningPlaceholders);
+        Assert.Equal(new[]
+        {
+            "goldBaseIncomePerSecond", "goldStartingAmount",
+            "unitSeparationDistance", "unitSeparationPushPerSecond", "unitSpawnSpacing",
+        }, rules.TuningPlaceholders);
+        Assert.True(rules.UnitSeparationDistance > Fix.Zero);
     }
 
     [Fact]
@@ -77,6 +85,9 @@ public class MatchRulesTests
     [InlineData("deploySpawnDelaySeconds")]
     [InlineData("handSize")]
     [InlineData("deckSize")]
+    [InlineData("unitSeparationDistance")]
+    [InlineData("unitSeparationPushPerSecond")]
+    [InlineData("unitSpawnSpacing")]
     public void MissingKey_IsRejected(string key)
     {
         string json = string.Join("\n", ValidJson.Split('\n').Where(line => !line.Contains("\"" + key + "\"")));
@@ -101,6 +112,9 @@ public class MatchRulesTests
     [InlineData("\"deploySpawnDelaySeconds\": 1", "\"deploySpawnDelaySeconds\": 0.01", "whole number of ticks")]
     [InlineData("\"handSize\": 4", "\"handSize\": 8", "smaller than deckSize")]
     [InlineData("\"deckSize\": 8", "\"deckSize\": 0", "between 1 and")]
+    [InlineData("\"unitSeparationDistance\": 0.6", "\"unitSeparationDistance\": 0", "at least")]
+    [InlineData("\"unitSeparationPushPerSecond\": 1.5", "\"unitSeparationPushPerSecond\": -1", "at least")]
+    [InlineData("\"unitSpawnSpacing\": 0.5", "\"unitSpawnSpacing\": 65", "at most 64")]
     public void InvalidValues_AreRejected(string original, string replacement, string fragment)
     {
         Assert.Contains(original, ValidJson);

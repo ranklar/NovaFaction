@@ -2,6 +2,7 @@ using NovaFaction.Sim.Commands;
 using NovaFaction.Sim.Content;
 using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
+using NovaFaction.Sim.Units;
 
 namespace NovaFaction.Sim.Tests;
 
@@ -17,8 +18,12 @@ public class DeterminismTests
     /// A full match of scripted random inputs for both players (deploys, abilities, no-ops),
     /// submitted in shuffled order to exercise canonical sorting.
     /// </summary>
-    internal static CommandLog ScriptedLog(MatchRules rules, ulong inputSeed)
+    internal static CommandLog ScriptedLog(MatchRules rules, ulong inputSeed, MapDefinition? map = null)
     {
+        map ??= MapTestData.LoadTwoLane();
+        // Targets range one cell beyond every map edge, so many deploys are valid and some are not.
+        long cell = map.CellSize.Raw;
+        long maxX = (map.Width + 1) * cell, maxY = (map.Height + 1) * cell;
         var rng = new SimRandom(inputSeed);
         var log = new CommandLog();
         var sequence = new int[2];
@@ -30,8 +35,8 @@ public class DeterminismTests
                 int count = rng.Chance(Fix.Parse("0.1")) ? rng.NextInt(1, 4) : 0;
                 for (int i = 0; i < count; i++)
                 {
-                    var target = new FixVector2(Fix.FromRaw(rng.NextInt(-1_000_000, 1_000_000)),
-                        Fix.FromRaw(rng.NextInt(-1_000_000, 1_000_000)));
+                    var target = new FixVector2(Fix.FromRaw(rng.NextInt((int)-cell, (int)maxX)),
+                        Fix.FromRaw(rng.NextInt((int)-cell, (int)maxY)));
                     int kind = rng.NextInt(0, 3);
                     int seq = sequence[player]++;
                     commands.Add(kind == 0 ? Command.None(tick, player, seq)
@@ -53,8 +58,8 @@ public class DeterminismTests
         Assert.Equal(3600, log.TickCount);
         Assert.True(log.CommandCount > 500, "script should produce plenty of commands");
 
-        var a = new Simulation(rules, Map, 0xC0FFEE);
-        var b = new Simulation(MatchRulesTests.LoadShippedRules(), MapTestData.LoadTwoLane(), 0xC0FFEE); // independently loaded rules
+        var a = TestSim.New(rules, Map, 0xC0FFEE);
+        var b = TestSim.New(MatchRulesTests.LoadShippedRules(), MapTestData.LoadTwoLane(), 0xC0FFEE); // independently loaded rules
         Assert.Equal(a.ComputeHash(), b.ComputeHash());
 
         int ticks = 0;
@@ -64,10 +69,56 @@ public class DeterminismTests
             a.Tick(commands);
             b.Tick(commands);
             Assert.Equal(a.ComputeHash(), b.ComputeHash());
+            foreach (Unit u in a.State.Units)
+            {
+                Assert.True(u.IsFlying || a.State.Map.Grid.IsWalkableAt(u.Position), "unit " + u.Id + " on a blocked cell");
+            }
             ticks++;
         }
         Assert.Equal(180 * 20, ticks);
         Assert.True(b.IsEnded);
+        Assert.Contains(a.State.Units, u => u.Owner == 0);
+        Assert.Contains(a.State.Units, u => u.Owner == 1);
+    }
+
+    [Fact]
+    public void ScriptedDeploySequence_HashesIdenticallyEveryTick()
+    {
+        // Both players deploy by hand slot on fixed ticks: ground, swarm, flyer, an invalid target,
+        // and two drops on the same spot. Everything runs through two independently built sims.
+        var script = new Dictionary<int, Command[]>
+        {
+            [0] = new[] { Command.DeployCard(0, 0, 0, 0, TestSim.V("4.5", "10.5")), Command.DeployCard(0, 1, 0, 1, TestSim.V("13.5", "21.5")) },
+            [30] = new[] { Command.DeployCard(30, 0, 0, 2, TestSim.V("9.5", "10.5")), Command.DeployCard(30, 1, 0, 0, TestSim.V("4.5", "15.5")) },
+            [31] = new[] { Command.DeployCard(31, 1, 0, 3, TestSim.V("8.5", "25.5")) },
+            [120] = new[] { Command.DeployCard(120, 0, 0, 3, TestSim.V("13.25", "8.75")), Command.DeployCard(120, 0, 1, 1, TestSim.V("13.25", "8.75")) },
+            [400] = new[] { Command.DeployCard(400, 1, 0, 2, TestSim.V("2.5", "30.5")), Command.LeaderAbility(400, 0, 0, TestSim.V("1", "1")) },
+        };
+        MatchRules rules = TestSim.Rules(income: "1", start: "10");
+        Simulation a = TestSim.New(rules, Map, 777);
+        Simulation b = new Simulation(new MatchSetup(TestSim.Rules(income: "1", start: "10"), MapTestData.LoadTwoLane(),
+            TestSim.DefaultDeck(rules), TestSim.DefaultDeck(rules)), 777);
+        Assert.Equal(a.ComputeHash(), b.ComputeHash());
+
+        var seenHashes = new HashSet<ulong>();
+        for (int tick = 0; tick < 60 * 20; tick++)
+        {
+            Command[] commands = script.TryGetValue(tick, out Command[]? c) ? c : Array.Empty<Command>();
+            a.Tick(commands);
+            b.Tick(commands);
+            ulong hash = a.ComputeHash();
+            Assert.True(hash == b.ComputeHash(), "hashes diverged at tick " + tick);
+            seenHashes.Add(hash);
+        }
+        Assert.Equal(60 * 20, seenHashes.Count); // the state changes every tick
+        Assert.True(a.State.Units.Count >= 6, "the script should field several units, got " + a.State.Units.Count);
+        Assert.Contains(a.State.Units, u => u.State == UnitState.Holding);
+        Assert.Contains(a.State.Units, u => u.Owner == 1);
+        Assert.Equal(1, a.State.GetPlayer(1).IgnoredDeploys); // the river drop
+        for (int i = 0; i < a.State.Units.Count; i++)
+        {
+            Assert.Equal(a.State.Units[i].Position, b.State.Units[i].Position);
+        }
     }
 
     [Fact]
@@ -105,7 +156,7 @@ public class DeterminismTests
         Simulation live = SimulationTests.RunFullMatch(rules, 424242, script, liveHashes);
 
         // Replay from the simulation's own recorded log, not the script.
-        Simulation replay = Simulation.Replay(rules, Map, 424242, live.Log);
+        Simulation replay = TestSim.Replay(rules, Map, 424242, live.Log);
 
         Assert.Equal(live.ComputeHash(), replay.ComputeHash());
         Assert.Equal(liveHashes[liveHashes.Count - 1], replay.ComputeHash());
@@ -129,7 +180,7 @@ public class DeterminismTests
         {
             partial.Record(tick, live.Log.GetCommands(tick));
         }
-        Assert.Equal(liveHashes[1000], Simulation.Replay(rules, Map, 5, partial).ComputeHash());
+        Assert.Equal(liveHashes[1000], TestSim.Replay(rules, Map, 5, partial).ComputeHash());
     }
 
     [Fact]
@@ -143,8 +194,8 @@ public class DeterminismTests
             Command.LeaderAbility(0, 0, 1, target),
             Command.None(0, 1, 0),
         };
-        var a = new Simulation(rules, Map, 3);
-        var b = new Simulation(rules, Map, 3);
+        var a = TestSim.New(rules, Map, 3);
+        var b = TestSim.New(rules, Map, 3);
         a.Tick(ordered);
         b.Tick(new[] { ordered[2], ordered[1], ordered[0] });
         Assert.Equal(a.ComputeHash(), b.ComputeHash());
@@ -153,7 +204,7 @@ public class DeterminismTests
     [Fact]
     public void Hash_CoversEveryStateField()
     {
-        var sim = new Simulation(Rules, Map, 1);
+        var sim = TestSim.New(Rules, Map, 1);
         MatchState s = sim.State;
         var seen = new HashSet<ulong> { sim.ComputeHash() };
 
@@ -173,7 +224,20 @@ public class DeterminismTests
             player.IncomeRemainder = 3; Changed("IncomeRemainder of player " + p);
             player.Score = Fix.FromRaw(1); Changed("Score of player " + p);
             player.CommandsReceived = 1; Changed("CommandsReceived of player " + p);
+            player.IgnoredDeploys = 1; Changed("IgnoredDeploys of player " + p);
+            player.Cards.Play(2); Changed("hand/cycle order of player " + p);
+            player.Cards.ClearSlot(1); Changed("empty hand slot of player " + p);
         }
+
+        UnitDefinition golem = s.GetPlayer(0).Deck.Roster.Get("stone_golem");
+        s.PendingSpawnList.Add(new PendingSpawn(40, 0, golem, TestSim.V("4", "4"))); Changed("pending spawn");
+        s.NextUnitId = 7; Changed("NextUnitId");
+        Unit unit = s.AddUnit(1, golem, TestSim.V("4", "20")); Changed("unit added");
+        unit.Position = TestSim.V("4", "21"); Changed("unit position");
+        unit.Hp = Fix.FromInt(5); Changed("unit hp");
+        unit.State = UnitState.Holding; Changed("unit state");
+        unit.Objective = 2; Changed("unit objective");
+
         for (int i = 0; i < s.Map.Definition.Structures.Count; i++)
         {
             s.Map.DestroyStructure(i); Changed("destroyed structure " + i);
@@ -181,10 +245,23 @@ public class DeterminismTests
     }
 
     [Fact]
+    public void Hash_CoversUnitData()
+    {
+        // Same everything except one unit stat in the roster file: the hashes must differ.
+        MatchRules rules = Rules;
+        UnitRoster original = TestSim.LoadFantasy();
+        UnitRoster tweaked = UnitRoster.FromJson(TestSim.FantasyUnitsJson().Replace("\"hp\": 1800", "\"hp\": 1801"));
+        Assert.NotEqual(original.ContentHash, tweaked.ContentHash);
+        var a = new Simulation(new MatchSetup(rules, Map, TestSim.DefaultDeck(rules, original), TestSim.DefaultDeck(rules, original)), 1);
+        var b = new Simulation(new MatchSetup(rules, Map, TestSim.DefaultDeck(rules, original), TestSim.DefaultDeck(rules, tweaked)), 1);
+        Assert.NotEqual(a.ComputeHash(), b.ComputeHash());
+    }
+
+    [Fact]
     public void Hash_DistinguishesWhichPlayerHasAValue()
     {
-        var a = new Simulation(Rules, Map, 1);
-        var b = new Simulation(Rules, Map, 1);
+        var a = TestSim.New(Rules, Map, 1);
+        var b = TestSim.New(Rules, Map, 1);
         a.State.GetPlayer(0).Score = Fix.One;
         b.State.GetPlayer(1).Score = Fix.One;
         Assert.NotEqual(a.ComputeHash(), b.ComputeHash());
@@ -200,16 +277,20 @@ public class DeterminismTests
         MatchRules rules = MatchRules.FromJson(@"{
   ""ticksPerSecond"": 20, ""matchLengthSeconds"": 180, ""suddenDeathSeconds"": 60,
   ""goldBaseIncomePerSecond"": 0.35, ""goldStartingAmount"": 5, ""goldCap"": 10,
-  ""deploySpawnDelaySeconds"": 1, ""handSize"": 4, ""deckSize"": 8 }");
+  ""deploySpawnDelaySeconds"": 1, ""handSize"": 4, ""deckSize"": 8,
+  ""unitSeparationDistance"": 0.6, ""unitSeparationPushPerSecond"": 1.5, ""unitSpawnSpacing"": 0.5 }");
         // Likewise a fixed inline map, so editing content/maps does not move the pin.
         MapDefinition map = MapTestData.Small();
-        Assert.Equal(PinnedInitialHash, new Simulation(rules, map, 12345).ComputeHash());
-        Simulation sim = SimulationTests.RunFullMatch(rules, 12345, ScriptedLog(rules, 12345), map: map);
+        Assert.Equal(PinnedInitialHash, TestSim.New(rules, map, 12345).ComputeHash());
+        Simulation sim = SimulationTests.RunFullMatch(rules, 12345, ScriptedLog(rules, 12345, map), map: map);
+        // The pin must cover deploys, spawns and movement, not just the clock.
+        Assert.True(sim.State.Units.Count > 5, "scripted match should field units");
+        Assert.True(sim.State.Players.All(p => p.IgnoredDeploys > 0), "scripted match should include rejected deploys");
         Assert.Equal(PinnedFinalHash, sim.ComputeHash());
     }
 
-    private const ulong PinnedInitialHash = 0x31FB5C460926730AUL;
-    private const ulong PinnedFinalHash = 0xE3023109AA724F26UL;
+    private const ulong PinnedInitialHash = 0xD9CF86357FC2A83CUL;
+    private const ulong PinnedFinalHash = 0xF2B51B7610A5FB9FUL;
 }
 
 public class StateHasherTests

@@ -1,33 +1,32 @@
 using System;
 using System.Collections.Generic;
+using NovaFaction.Sim.Cards;
 using NovaFaction.Sim.Commands;
 using NovaFaction.Sim.Content;
 using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
+using NovaFaction.Sim.Units;
 
 namespace NovaFaction.Sim
 {
     /// <summary>
     /// A deterministic match. The only way time passes is <see cref="Tick"/>, called once per tick
-    /// (20 per second) with that tick's commands. Same rules + seed + commands = same result on
-    /// every device (same map data too: the map's content hash is part of the state hash).
+    /// (20 per second) with that tick's commands. Same setup + seed + commands = same result on
+    /// every device (same map and unit data too: their content hashes are part of the state hash).
     /// </summary>
     public sealed class Simulation
     {
         private readonly CommandLog _log = new CommandLog();
 
-        public Simulation(MatchRules rules, MapDefinition map, ulong seed)
+        public Simulation(MatchSetup setup, ulong seed)
         {
-            Rules = rules ?? throw new ArgumentNullException(nameof(rules));
-            if (map == null)
-            {
-                throw new ArgumentNullException(nameof(map));
-            }
+            Setup = setup ?? throw new ArgumentNullException(nameof(setup));
             Seed = seed;
-            State = new MatchState(seed, rules.MatchLengthTicks, rules.GoldStartingAmount, map);
+            State = new MatchState(seed, setup);
         }
 
-        public MatchRules Rules { get; }
+        public MatchSetup Setup { get; }
+        public MatchRules Rules => Setup.Rules;
         public MapDefinition Map => State.Map.Definition;
         public ulong Seed { get; }
         public MatchState State { get; }
@@ -43,8 +42,11 @@ namespace NovaFaction.Sim
         /// <summary>
         /// Advances one tick. Every command must be stamped with <c>State.Tick</c> and be well-formed
         /// (see <see cref="Command.Validate"/>); otherwise this throws and the state is unchanged.
-        /// Order of work: apply commands (canonical order), accrue income, advance the clock,
-        /// then handle clock expiry.
+        /// Order of work: apply commands (canonical order), create units of zero-delay deploys, move
+        /// units, accrue income, advance the tick and clock, create units whose spawn delay is over,
+        /// then handle clock expiry. A deploy on tick N with a delay of D ticks therefore creates its
+        /// units at time N + D: for D &gt; 0 they are in the state once <c>State.Tick</c> reaches N + D
+        /// and have not moved yet; for D = 0 they appear during tick N and already move on it.
         /// </summary>
         public void Tick(IReadOnlyList<Command> commands)
         {
@@ -73,6 +75,9 @@ namespace NovaFaction.Sim
             {
                 ApplyCommand(ordered[i]);
             }
+            FireDueSpawns(); // only zero-delay deploys from this tick are due here
+
+            UnitMovement.Tick(State, Rules);
 
             foreach (PlayerState player in State.Players)
             {
@@ -81,6 +86,7 @@ namespace NovaFaction.Sim
 
             State.Tick++;
             State.ClockRemainingTicks--;
+            FireDueSpawns();
             if (State.ClockRemainingTicks == 0)
             {
                 OnClockExpired();
@@ -88,13 +94,13 @@ namespace NovaFaction.Sim
         }
 
         /// <summary>Runs a fresh match from a recorded log and returns it.</summary>
-        public static Simulation Replay(MatchRules rules, MapDefinition map, ulong seed, CommandLog log)
+        public static Simulation Replay(MatchSetup setup, ulong seed, CommandLog log)
         {
             if (log == null)
             {
                 throw new ArgumentNullException(nameof(log));
             }
-            var sim = new Simulation(rules, map, seed);
+            var sim = new Simulation(setup, seed);
             for (int tick = 0; tick < log.TickCount; tick++)
             {
                 sim.Tick(log.GetCommands(tick));
@@ -111,13 +117,56 @@ namespace NovaFaction.Sim
                 case CommandType.None:
                     break;
                 case CommandType.DeployCard:
-                    // TODO(M1 units): check hand slot card, gold cost and deploy zone; spend gold;
-                    // schedule the spawn after Rules.DeploySpawnDelayTicks.
+                    DeployCard(player, command);
                     break;
                 case CommandType.LeaderAbility:
                     // TODO(M1 leaders): check leader is deployed and ability is off cooldown.
                     break;
             }
+        }
+
+        /// <summary>
+        /// A deploy is valid when the hand slot holds a card, the player has at least its cost in gold,
+        /// and the target is deployable for the player right now. Invalid deploys only bump
+        /// <see cref="PlayerState.IgnoredDeploys"/>. A valid deploy pays, cycles the hand and queues the spawn.
+        /// </summary>
+        private void DeployCard(PlayerState player, Command command)
+        {
+            UnitDefinition? card = player.Cards.GetSlot(command.HandSlot);
+            if (card == null
+                || player.Gold < Fix.FromInt(card.Cost)
+                || !State.Map.IsDeployable(player.Index, command.Target))
+            {
+                player.IgnoredDeploys++;
+                return;
+            }
+            player.Gold -= Fix.FromInt(card.Cost);
+            player.Cards.Play(command.HandSlot);
+            State.PendingSpawnList.Add(new PendingSpawn(State.Tick + Rules.DeploySpawnDelayTicks, player.Index, card,
+                command.Target));
+        }
+
+        /// <summary>Creates the units of every pending deploy that is due, in deploy order.</summary>
+        private void FireDueSpawns()
+        {
+            List<PendingSpawn> pending = State.PendingSpawnList;
+            int kept = 0;
+            for (int i = 0; i < pending.Count; i++)
+            {
+                PendingSpawn spawn = pending[i];
+                if (spawn.SpawnTick > State.Tick)
+                {
+                    pending[kept++] = spawn;
+                    continue;
+                }
+                FixVector2[] positions = UnitMovement.SpawnPositions(State.Map.Grid, spawn.Owner, spawn.Target,
+                    spawn.Definition.SpawnCount, Rules.UnitSpawnSpacing);
+                foreach (FixVector2 position in positions)
+                {
+                    State.AddUnit(spawn.Owner, spawn.Definition, position);
+                }
+            }
+            pending.RemoveRange(kept, pending.Count - kept);
         }
 
         private void AccrueIncome(PlayerState player)

@@ -1,3 +1,4 @@
+using NovaFaction.Sim.Cards;
 using NovaFaction.Sim.Commands;
 using NovaFaction.Sim.Content;
 using NovaFaction.Sim.Map;
@@ -16,13 +17,13 @@ public class SimulationTests
     private static MatchRules RulesWith(string income, string start, string cap = "10") =>
         MatchRules.FromJson("{\"ticksPerSecond\": 20, \"matchLengthSeconds\": 180, \"suddenDeathSeconds\": 60, "
             + "\"goldBaseIncomePerSecond\": " + income + ", \"goldStartingAmount\": " + start
-            + ", \"goldCap\": " + cap + ", \"deploySpawnDelaySeconds\": 1, \"handSize\": 4, \"deckSize\": 8}");
+            + ", \"goldCap\": " + cap + ", \"deploySpawnDelaySeconds\": 1, \"handSize\": 4, \"deckSize\": 8" + TestSim.MovementRulesJson + "}");
 
     [Fact]
     public void NewMatch_StartsInRegulationWithStartingGold()
     {
         MatchRules rules = Rules;
-        var sim = new Simulation(rules, Map, seed: 1);
+        var sim = TestSim.New(rules, Map, seed: 1);
         MatchState s = sim.State;
 
         Assert.Equal(0, s.Tick);
@@ -36,17 +37,26 @@ public class SimulationTests
             Assert.Equal(0, p.CommandsReceived);
             Assert.Equal(0L, p.IncomeRemainder);
         }
-        Assert.Equal(new SimRandom(1).GetState(), s.Random.GetState());
+        // The match RNG has shuffled both players' 8-card decks and nothing else.
+        var expectedRng = new SimRandom(1);
+        expectedRng.Shuffle(new List<int>(Enumerable.Range(0, 8)));
+        expectedRng.Shuffle(new List<int>(Enumerable.Range(0, 8)));
+        Assert.Equal(expectedRng.GetState(), s.Random.GetState());
+        Assert.Empty(s.Units);
+        Assert.Empty(s.PendingSpawns);
+        Assert.Equal(1, s.NextUnitId);
         Assert.Same(s.Players[1], s.GetPlayer(1));
         Assert.Throws<ArgumentOutOfRangeException>(() => s.GetPlayer(2));
-        Assert.Throws<ArgumentNullException>(() => new Simulation(null!, Map, 1));
-        Assert.Throws<ArgumentNullException>(() => new Simulation(rules, null!, 1));
+        Assert.Throws<ArgumentNullException>(() => new Simulation(null!, 1));
+        Deck deck = TestSim.DefaultDeck(rules);
+        Assert.Throws<ArgumentNullException>(() => new MatchSetup(null!, Map, deck, deck));
+        Assert.Throws<ArgumentNullException>(() => new MatchSetup(rules, null!, deck, deck));
     }
 
     [Fact]
     public void Tick_AdvancesTickAndClock()
     {
-        var sim = new Simulation(Rules, Map, 1);
+        var sim = TestSim.New(Rules, Map, 1);
         sim.Tick(NoCommands);
         sim.Tick(NoCommands);
         Assert.Equal(2, sim.State.Tick);
@@ -58,7 +68,7 @@ public class SimulationTests
     public void Income_IsExactOverWholeSeconds()
     {
         // 0.35/20 is not representable in Q48.16; the carried remainder must keep it exact.
-        var sim = new Simulation(RulesWith("0.35", "0"), Map, 1);
+        var sim = TestSim.New(RulesWith("0.35", "0"), Map, 1);
         for (int second = 1; second <= 20; second++)
         {
             for (int t = 0; t < 20; t++)
@@ -75,7 +85,7 @@ public class SimulationTests
     [Fact]
     public void Income_GrowsEveryTickWithinASecond()
     {
-        var sim = new Simulation(RulesWith("1", "0"), Map, 1);
+        var sim = TestSim.New(RulesWith("1", "0"), Map, 1);
         Fix previous = Fix.Zero;
         for (int t = 0; t < 20; t++)
         {
@@ -91,7 +101,7 @@ public class SimulationTests
     public void Gold_ReachesCapAndStaysThere()
     {
         MatchRules rules = Rules;
-        var sim = new Simulation(rules, Map, 99);
+        var sim = TestSim.New(rules, Map, 99);
         // From the starting amount, the cap is reached after (cap - start) / income seconds.
         Fix secondsToCap = (rules.GoldCap - rules.GoldStartingAmount) / rules.GoldBaseIncomePerSecond;
         int ticksToCap = Fix.CeilToInt(secondsToCap * Fix.FromInt(rules.TicksPerSecond));
@@ -124,7 +134,7 @@ public class SimulationTests
     [Fact]
     public void Gold_StartingAtCap_StaysAtCap()
     {
-        var sim = new Simulation(RulesWith("0.35", "10"), Map, 3);
+        var sim = TestSim.New(RulesWith("0.35", "10"), Map, 3);
         for (int t = 0; t < 100; t++)
         {
             sim.Tick(NoCommands);
@@ -135,7 +145,7 @@ public class SimulationTests
     [Fact]
     public void ZeroIncome_KeepsGoldConstant()
     {
-        var sim = new Simulation(RulesWith("0", "3"), Map, 3);
+        var sim = TestSim.New(RulesWith("0", "3"), Map, 3);
         for (int t = 0; t < 100; t++)
         {
             sim.Tick(NoCommands);
@@ -147,7 +157,7 @@ public class SimulationTests
     public void Clock_ReachesZeroAndMatchEnds()
     {
         MatchRules rules = Rules;
-        var sim = new Simulation(rules, Map, 7);
+        var sim = TestSim.New(rules, Map, 7);
         for (int t = 0; t < rules.MatchLengthTicks - 1; t++)
         {
             sim.Tick(NoCommands);
@@ -171,11 +181,12 @@ public class SimulationTests
     }
 
     [Fact]
-    public void Commands_AreRecordedCountedAndOtherwiseHaveNoEffectYet()
+    public void Commands_AreRecordedInCanonicalOrderAndCounted()
     {
-        var withCommands = new Simulation(Rules, Map, 11);
-        var without = new Simulation(Rules, Map, 11);
-        var target = new FixVector2(Fix.FromInt(4), Fix.FromInt(9));
+        var withCommands = TestSim.New(Rules, Map, 11);
+        var without = TestSim.New(Rules, Map, 11);
+        // Inside the neutral river rows: nobody may deploy here, so both deploys are rejected.
+        var target = new FixVector2(Fix.FromInt(4), Fix.FromInt(15));
 
         withCommands.Tick(new[]
         {
@@ -195,12 +206,16 @@ public class SimulationTests
         }, withCommands.Log.GetCommands(0));
         Assert.Equal(2, withCommands.State.GetPlayer(0).CommandsReceived);
         Assert.Equal(2, withCommands.State.GetPlayer(1).CommandsReceived);
+        Assert.Equal(2, withCommands.State.GetPlayer(0).IgnoredDeploys);
+        Assert.Equal(0, withCommands.State.GetPlayer(1).IgnoredDeploys);
 
-        // Gold, clock and RNG are untouched by the not-yet-implemented commands.
+        // Rejected deploys, None and (not yet implemented) LeaderAbility change nothing else.
         for (int p = 0; p < 2; p++)
         {
             Assert.Equal(without.State.GetPlayer(p).Gold, withCommands.State.GetPlayer(p).Gold);
+            Assert.Equal(TestSim.HandIds(without.State.GetPlayer(p)), TestSim.HandIds(withCommands.State.GetPlayer(p)));
         }
+        Assert.Empty(withCommands.State.PendingSpawns);
         Assert.Equal(without.State.ClockRemainingTicks, withCommands.State.ClockRemainingTicks);
         Assert.Equal(without.State.Random.GetState(), withCommands.State.Random.GetState());
     }
@@ -218,7 +233,7 @@ public class SimulationTests
     [MemberData(nameof(BadTickInputs))]
     public void InvalidCommands_ThrowAndLeaveStateUnchanged(Command[] commands, string fragment)
     {
-        var sim = new Simulation(Rules, Map, 5);
+        var sim = TestSim.New(Rules, Map, 5);
         ulong before = sim.ComputeHash();
 
         var ex = Assert.Throws<ArgumentException>(() => sim.Tick(commands));
@@ -234,14 +249,14 @@ public class SimulationTests
     [Fact]
     public void Tick_NullCommands_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => new Simulation(Rules, Map, 1).Tick(null!));
+        Assert.Throws<ArgumentNullException>(() => TestSim.New(Rules, Map, 1).Tick(null!));
     }
 
     /// <summary>Plays a whole match, feeding the log's commands where it has them and nothing after.</summary>
     internal static Simulation RunFullMatch(MatchRules rules, ulong seed, CommandLog log, List<ulong>? hashes = null,
         MapDefinition? map = null)
     {
-        var sim = new Simulation(rules, map ?? Map, seed);
+        var sim = TestSim.New(rules, map ?? Map, seed);
         hashes?.Add(sim.ComputeHash());
         while (!sim.IsEnded)
         {

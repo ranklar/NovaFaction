@@ -11,7 +11,7 @@ public class MapStateTests
 {
     private static MatchRules Rules => MatchRulesTests.LoadShippedRules();
 
-    private static Simulation SmallSim(ulong seed = 1) => new Simulation(Rules, Small(), seed);
+    private static Simulation SmallSim(ulong seed = 1) => TestSim.New(Rules, Small(), seed);
 
     private static FixVector2 At(MapState map, int x, int y) => map.Grid.CellToWorld(x, y);
 
@@ -19,7 +19,7 @@ public class MapStateTests
     public void NewMatch_HasTheMapWithNothingDestroyed()
     {
         MapDefinition def = Small();
-        var sim = new Simulation(Rules, def, 1);
+        var sim = TestSim.New(Rules, def, 1);
         MapState map = sim.State.Map;
         Assert.Same(def, map.Definition);
         Assert.Same(def, sim.Map);
@@ -136,18 +136,18 @@ public class MapStateTests
     public void StateHash_DetectsDifferentMapData()
     {
         ulong baseline = SmallSim().ComputeHash();
-        Assert.Equal(baseline, new Simulation(Rules, MapDefinition.FromJson(SmallJson().Replace("\n", "\r\n")), 1).ComputeHash());
+        Assert.Equal(baseline, TestSim.New(Rules, MapDefinition.FromJson(SmallJson().Replace("\n", "\r\n")), 1).ComputeHash());
 
         // Same id, one cell different.
-        var edited = new Simulation(Rules, MapDefinition.FromJson(SmallJson(rows: SmallRowsWith(6, "#......"))), 1);
+        var edited = TestSim.New(Rules, MapDefinition.FromJson(SmallJson(rows: SmallRowsWith(6, "#......"))), 1);
         Assert.NotEqual(baseline, edited.ComputeHash());
 
         // Same content, different id.
-        var renamed = new Simulation(Rules, MapDefinition.FromJson(SmallJson(id: "\"small-b\"")), 1);
+        var renamed = TestSim.New(Rules, MapDefinition.FromJson(SmallJson(id: "\"small-b\"")), 1);
         Assert.NotEqual(baseline, renamed.ComputeHash());
 
         // Another map entirely.
-        Assert.NotEqual(baseline, new Simulation(Rules, LoadTwoLane(), 1).ComputeHash());
+        Assert.NotEqual(baseline, TestSim.New(Rules, LoadTwoLane(), 1).ComputeHash());
     }
 
     [Fact]
@@ -155,8 +155,8 @@ public class MapStateTests
     {
         MatchRules rules = Rules;
         CommandLog log = DeterminismTests.ScriptedLog(rules, 31);
-        var a = new Simulation(rules, LoadTwoLane(), 77);
-        var b = new Simulation(MatchRulesTests.LoadShippedRules(), LoadTwoLane(), 77);
+        var a = TestSim.New(rules, LoadTwoLane(), 77);
+        var b = TestSim.New(MatchRulesTests.LoadShippedRules(), LoadTwoLane(), 77);
         // Structures fall at fixed ticks (standing in for combat, which does not exist yet).
         var destroyAt = new Dictionary<int, int> { { 100, 1 }, { 700, 5 }, { 1500, 0 } };
         while (!a.IsEnded)

@@ -577,7 +577,7 @@ namespace NovaFaction.Sim.Map
             }
         }
 
-        private static bool IsValidId(string id)
+        internal static bool IsValidId(string id)
         {
             if (id.Length == 0 || id.Length > 64)
             {

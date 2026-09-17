@@ -1,0 +1,83 @@
+# ---------------------------------------------------------------------------
+# Top-level build output
+# ---------------------------------------------------------------------------
+/builds/
+
+# ---------------------------------------------------------------------------
+# Unity (client/)
+# ---------------------------------------------------------------------------
+/client/[Ll]ibrary/
+/client/[Tt]emp/
+/client/.utmp/
+/client/[Ll]ogs/
+/client/[Oo]bj/
+/client/[Bb]uild/
+/client/[Bb]uilds/
+/client/[Uu]ser[Ss]ettings/
+/client/[Mm]emoryCaptures/
+/client/[Rr]ecordings/
+
+# Generated IDE project/solution files (Unity regenerates these)
+/client/*.csproj
+/client/*.unityproj
+/client/*.sln
+/client/*.slnx
+/client/*.suo
+/client/*.user
+/client/*.userprefs
+/client/*.pidb
+/client/*.booproj
+/client/*.svd
+/client/*.pdb
+/client/*.mdb
+/client/*.opendb
+/client/*.VC.db
+/client/.vs/
+/client/.vscode/
+/client/.idea/
+/client/.gradle/
+/client/.consulo/
+
+# Unity crash / debug artifacts
+/client/sysinfo.txt
+/client/mono_crash.*
+/client/crashlytics-build.properties
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+
+# Unity build artifacts
+*.apk
+*.aab
+*.unitypackage.tmp
+*_BurstDebugInformation_DoNotShip/
+*_BackUpThisFolder_ButDontShipItWithYourGame/
+
+# Auto-generated asset folders
+/client/[Aa]ssets/[Ss]treamingAssets/aa/*
+/client/[Aa]ssets/AssetStoreTools*
+/client/[Aa]ssets/Plugins/Editor/JetBrains*
+
+# ---------------------------------------------------------------------------
+# .NET (sim/)
+# ---------------------------------------------------------------------------
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+.vs/
+TestResults/
+*.trx
+*.coverage
+coverage*.json
+coverage*.xml
+
+# ---------------------------------------------------------------------------
+# OS / editor noise
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+*.swp
+*~

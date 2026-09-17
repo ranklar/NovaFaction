@@ -72,9 +72,11 @@ public class MapGoldTests
     public void Mine_IsNeverATarget_AndUnitsWalkAroundIt()
     {
         // A knight right below the west mine walks up the lane to the enemy: it never targets the mine (only enemy
-        // structures by index), never stands on its cell, and scores nothing on the way.
+        // structures by index), never stands on its cell, and scores nothing on the way. Its player already owns the
+        // mine, so it does not stop to capture it.
         Simulation sim = GoldSim();
         MineState mine = sim.State.Mines[MineWest];
+        mine.Owner = 0;
         Unit knight = sim.State.AddUnit(0, Card(sim, "knight"), mine.Position + TestSim.V("0", "-1"));
         int startY = sim.State.Map.Grid.WorldToCell(knight.Position).Y;
         for (int t = 0; t < 100; t++)

@@ -6,10 +6,10 @@ namespace NovaFaction.Sim.Tests;
 
 public class DeckTests
 {
-    private static UnitRoster Fantasy => TestSim.LoadFantasy();
+    private static CardCatalog Fantasy => TestSim.LoadFantasyCards();
 
     /// <summary>The fantasy units plus a second leader and a spare card, for deck-building edge cases.</summary>
-    private static UnitRoster ExtendedRoster()
+    private static CardCatalog ExtendedRoster()
     {
         string json = TestSim.FantasyUnitsJson();
         int end = json.LastIndexOf(']');
@@ -17,7 +17,7 @@ public class DeckTests
             + UnitRosterTests.DefaultUnitBody.Replace("\"grunt\"", "\"queen\"").Replace("\"bruiser\"", "\"leader\"")
                 .Replace("\"isLeader\": false", "\"isLeader\": true")
             + "\n}\n";
-        return UnitRoster.FromJson(json.Substring(0, end).TrimEnd() + extra + json.Substring(end));
+        return TestSim.Cards(UnitRoster.FromJson(json.Substring(0, end).TrimEnd() + extra + json.Substring(end)));
     }
 
     [Fact]
@@ -34,7 +34,7 @@ public class DeckTests
     public void ListingOrder_DoesNotAffectTheMatch()
     {
         MatchRules rules = MatchRulesTests.LoadShippedRules();
-        UnitRoster roster = Fantasy;
+        CardCatalog roster = Fantasy;
         Deck a = Deck.Create(roster, TestSim.DefaultDeckIds, 8);
         Deck b = Deck.Create(roster, TestSim.DefaultDeckIds.Reverse().ToArray(), 8);
         var simA = new Simulation(new MatchSetup(rules, MapTestData.LoadTwoLane(), TestSim.LoadStructures(), a, a), 5);
@@ -45,7 +45,7 @@ public class DeckTests
     [Fact]
     public void SwappedCard_IsAccepted()
     {
-        UnitRoster roster = ExtendedRoster();
+        CardCatalog roster = ExtendedRoster();
         string[] ids = TestSim.DefaultDeckIds.Select(id => id == "knight" ? "grunt" : id).ToArray();
         Assert.Contains("grunt", Deck.Create(roster, ids, 8).Cards.Select(c => c.Id));
     }
@@ -67,7 +67,7 @@ public class DeckTests
     [MemberData(nameof(InvalidDecks))]
     public void InvalidDeck_IsRejectedWithReason(string?[]? ids, string fragment)
     {
-        UnitRoster roster = ExtendedRoster();
+        CardCatalog roster = ExtendedRoster();
         string? problem = Deck.Validate(roster, ids, 8);
         Assert.NotNull(problem);
         Assert.Contains(fragment, problem);
@@ -82,7 +82,7 @@ public class DeckTests
     public void Setup_RejectsDeckOfWrongSizeForRules()
     {
         MatchRules rules = MatchRulesTests.LoadShippedRules();
-        UnitRoster roster = ExtendedRoster();
+        CardCatalog roster = ExtendedRoster();
         Deck nine = Deck.Create(roster, TestSim.DefaultDeckIds.Concat(new[] { "grunt" }).ToArray(), 9);
         Deck eight = Deck.Create(roster, TestSim.DefaultDeckIds, 8);
         Assert.Throws<ArgumentException>(() => new MatchSetup(rules, MapTestData.LoadTwoLane(), TestSim.LoadStructures(), eight, nine));
@@ -94,13 +94,14 @@ public class DeckTests
     {
         MatchRules rules = MatchRulesTests.LoadShippedRules();
         // Half a cell (0.5) per tick at 20 ticks/s = 10 units/s, including the 1.5 separation push times (2 + 0.3): moving push, weak stopped push and sideways slide.
-        UnitRoster fast = UnitRoster.FromJson(TestSim.FantasyUnitsJson().Replace("\"moveSpeed\": 2,", "\"moveSpeed\": 6.56,"));
-        Deck deck = Deck.Create(fast, TestSim.DefaultDeckIds, 8);
+        // goblin_pack and griffin both move at 1.5; goblin_pack comes first in the deck's id order.
+        UnitRoster fast = UnitRoster.FromJson(TestSim.FantasyUnitsJson().Replace("\"moveSpeed\": 1.5,", "\"moveSpeed\": 6.56,"));
+        Deck deck = Deck.Create(TestSim.Cards(fast), TestSim.DefaultDeckIds, 8);
         var ex = Assert.Throws<ArgumentException>(() => new MatchSetup(rules, MapTestData.LoadTwoLane(), TestSim.LoadStructures(), deck, deck));
-        Assert.Contains("fire_spirit", ex.Message);
+        Assert.Contains("goblin_pack", ex.Message);
 
-        UnitRoster ok = UnitRoster.FromJson(TestSim.FantasyUnitsJson().Replace("\"moveSpeed\": 2,", "\"moveSpeed\": 6.54,"));
-        Deck okDeck = Deck.Create(ok, TestSim.DefaultDeckIds, 8);
+        UnitRoster ok = UnitRoster.FromJson(TestSim.FantasyUnitsJson().Replace("\"moveSpeed\": 1.5,", "\"moveSpeed\": 6.54,"));
+        Deck okDeck = Deck.Create(TestSim.Cards(ok), TestSim.DefaultDeckIds, 8);
         _ = new MatchSetup(rules, MapTestData.LoadTwoLane(), TestSim.LoadStructures(), okDeck, okDeck);
     }
 }
@@ -171,7 +172,7 @@ public class CardCycleTests
         Assert.Equal(PinnedPlayer0, string.Join(",", CycleOrder(sim.State.GetPlayer(0))));
     }
 
-    private const string PinnedPlayer0 = "goblin_pack,stone_golem,knight,fire_spirit,griffin,warlord,catapult,elf_archer";
+    private const string PinnedPlayer0 = "goblin_pack,stone_golem,knight,fireball,griffin,warlord,catapult,elf_archer";
 
     [Fact]
     public void PlayingASlot_MovesNextIntoSlotAndPlayedToBack()
@@ -181,7 +182,7 @@ public class CardCycleTests
         string[] before = CycleOrder(sim.State.GetPlayer(0));
         // before = [h0 h1 h2 h3 | q0 q1 q2 q3]
 
-        UnitDefinition played = cards.Play(2);
+        CardDefinition played = cards.Play(2);
 
         Assert.Equal(before[2], played.Id);
         string[] after = CycleOrder(sim.State.GetPlayer(0));

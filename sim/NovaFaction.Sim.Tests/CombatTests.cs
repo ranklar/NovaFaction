@@ -16,7 +16,9 @@ public class CombatTests
     // twolane structure indices and footprints (cells = world units).
     internal const int Keep0 = 0, Tower0West = 1, Tower0East = 2, Keep1 = 3, Tower1West = 4, Tower1East = 5;
 
-    /// <summary>A test-only roster: stationary "dummy" targets (hp as named), plus a flying one.</summary>
+    /// <summary>
+    /// A test-only roster: stationary "dummy" targets (hp as named), a flying one, and a fast melee splash "spirit".
+    /// </summary>
     internal static readonly UnitRoster Dummies = UnitRoster.FromJson(@"{
   ""formatVersion"": 1, ""faction"": ""dummies"",
   ""units"": [
@@ -28,7 +30,10 @@ public class CombatTests
       ""isFlying"": false, ""spawnCount"": 1, ""isLeader"": false },
     { ""id"": ""balloon"", ""displayName"": ""Balloon"", ""slot"": ""flyer"", ""cost"": 1, ""hp"": 1000, ""damage"": 0,
       ""attackIntervalSeconds"": 1, ""range"": 0.5, ""moveSpeed"": 0, ""targets"": ""air"", ""targetPriority"": ""any"",
-      ""isFlying"": true, ""spawnCount"": 1, ""isLeader"": false }
+      ""isFlying"": true, ""spawnCount"": 1, ""isLeader"": false },
+    { ""id"": ""spirit"", ""displayName"": ""Spirit"", ""slot"": ""bruiser"", ""cost"": 1, ""hp"": 1, ""damage"": 300,
+      ""attackIntervalSeconds"": 1, ""range"": 0.5, ""moveSpeed"": 2, ""targets"": ""both"", ""targetPriority"": ""any"",
+      ""isFlying"": false, ""spawnCount"": 1, ""splashRadius"": 1.5, ""isLeader"": false }
   ]
 }");
 
@@ -309,7 +314,7 @@ public class CombatTests
     public void MeleeSplash_HitsSeveralEnemiesAtOnce()
     {
         Simulation sim = NewSim();
-        Unit spirit = Place(sim, 0, "fire_spirit", "9", "11");
+        Unit spirit = Place(sim, 0, "spirit", "9", "11");
         Unit a = Place(sim, 1, "dummy", "9", "11.4");
         Unit b = Place(sim, 1, "dummy", "10", "11.9"); // 1.12 from the impact at a: inside the 1.5 splash
         Unit c = Place(sim, 1, "dummy", "9", "13.5");

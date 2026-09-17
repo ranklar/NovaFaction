@@ -37,18 +37,16 @@ namespace NovaFaction.Sim.Content
         StructuresOnly = 1,
     }
 
-    /// <summary>One card/unit type from a faction's units.json. Immutable.</summary>
-    public sealed class UnitDefinition
+    /// <summary>One unit card from a faction's units.json. Immutable.</summary>
+    public sealed class UnitDefinition : CardDefinition
     {
         internal UnitDefinition(int index, string id, string displayName, UnitSlot slot, int cost, Fix hp, Fix damage,
             Fix attackIntervalSeconds, Fix range, Fix moveSpeed, TargetLayer targets, TargetPriority targetPriority,
-            bool isFlying, int spawnCount, Fix projectileSpeed, Fix splashRadius, bool isLeader, bool isPlaceholder)
+            bool isFlying, int spawnCount, Fix projectileSpeed, Fix splashRadius, bool isLeader, bool canCapture,
+            bool isPlaceholder)
+            : base(index, id, displayName, cost, isPlaceholder)
         {
-            Index = index;
-            Id = id;
-            DisplayName = displayName;
             Slot = slot;
-            Cost = cost;
             Hp = hp;
             Damage = damage;
             AttackIntervalSeconds = attackIntervalSeconds;
@@ -61,21 +59,12 @@ namespace NovaFaction.Sim.Content
             ProjectileSpeed = projectileSpeed;
             SplashRadius = splashRadius;
             IsLeader = isLeader;
-            IsPlaceholder = isPlaceholder;
+            CanCapture = canCapture;
         }
 
-        /// <summary>Position in the file's "units" list.</summary>
-        public int Index { get; }
+        public override CardKind Kind => CardKind.Unit;
 
-        /// <summary>Card id, unique within the faction (a-z, 0-9, '_', '-').</summary>
-        public string Id { get; }
-
-        public string DisplayName { get; }
-
-        public UnitSlot Slot { get; }
-
-        /// <summary>Gold cost, 1..7.</summary>
-        public int Cost { get; }
+        public override UnitSlot Slot { get; }
 
         /// <summary>Maximum hit points of each spawned unit.</summary>
         public Fix Hp { get; }
@@ -116,12 +105,15 @@ namespace NovaFaction.Sim.Content
 
         public bool IsRanged => ProjectileSpeed > Fix.Zero;
 
-        public bool IsLeader { get; }
+        public override bool IsLeader { get; }
 
-        /// <summary>True while the unit's numbers are guesses awaiting tuning ("placeholder": true in the file).</summary>
-        public bool IsPlaceholder { get; }
+        /// <summary>
+        /// Whether the unit stops to capture a gold mine it passes (docs/design.md "Map gold"). Defaults to true for
+        /// ground units that target anything; flyers and structures-only units can never capture.
+        /// </summary>
+        public bool CanCapture { get; }
 
-        internal void AppendHash(ref StateHasher h)
+        internal override void AppendHash(ref StateHasher h)
         {
             h.Add(Id);
             h.Add(DisplayName);
@@ -139,6 +131,7 @@ namespace NovaFaction.Sim.Content
             h.Add(ProjectileSpeed);
             h.Add(SplashRadius);
             h.Add(IsLeader);
+            h.Add(CanCapture);
         }
     }
 
@@ -163,12 +156,13 @@ namespace NovaFaction.Sim.Content
         private const string KeyPlaceholder = "placeholder";
         private const string KeyProjectileSpeed = "projectileSpeed";
         private const string KeySplashRadius = "splashRadius";
+        private const string KeyCanCapture = "canCapture";
         private static readonly string[] UnitKeys =
         {
             "id", "displayName", "slot", "cost", "hp", "damage", "attackIntervalSeconds", "range", "moveSpeed",
             "targets", "targetPriority", "isFlying", "spawnCount", "isLeader",
         };
-        private static readonly string[] OptionalUnitKeys = { KeyPlaceholder, KeyProjectileSpeed, KeySplashRadius };
+        private static readonly string[] OptionalUnitKeys = { KeyPlaceholder, KeyProjectileSpeed, KeySplashRadius, KeyCanCapture };
 
         private static readonly string[] SlotNames =
             { "tank", "bruiser", "swarm", "ranged", "flyer", "siege", "support", "spell", "building", "leader" };
@@ -270,31 +264,20 @@ namespace NovaFaction.Sim.Content
             }
             CheckKeys(item, UnitKeys, OptionalUnitKeys, "unit");
 
-            JsonValue idValue = item.Get("id");
-            string id = idValue.AsString();
-            if (!MapDefinition.IsValidId(id))
-            {
-                throw idValue.Error("id must be 1-64 characters of a-z, 0-9, '_' or '-'.");
-            }
+            string id = ReadId(item);
             string what = "unit \"" + id + "\": ";
+            string displayName = ReadDisplayName(item, what);
 
-            JsonValue nameValue = item.Get("displayName");
-            string displayName = nameValue.AsString();
-            if (displayName.Trim().Length == 0)
+            JsonValue slotValue = item.Get("slot");
+            var slot = (UnitSlot)ReadName(slotValue, SlotNames, what + "slot");
+            if (slot == UnitSlot.Spell)
             {
-                throw nameValue.Error(what + "displayName must not be empty.");
+                throw slotValue.Error(what + "slot \"spell\" is for spell cards, which belong in spells.json.");
             }
-
-            var slot = (UnitSlot)ReadName(item.Get("slot"), SlotNames, what + "slot");
             var targets = (TargetLayer)ReadName(item.Get("targets"), TargetNames, what + "targets");
             var priority = (TargetPriority)ReadName(item.Get("targetPriority"), PriorityNames, what + "targetPriority");
 
-            JsonValue costValue = item.Get("cost");
-            int cost = costValue.AsInt();
-            if (cost < MinCost || cost > MaxCost)
-            {
-                throw costValue.Error(what + "cost must be between " + MinCost + " and " + MaxCost + " but is " + cost + ".");
-            }
+            int cost = ReadCost(item, what);
 
             Fix hp = ReadStat(item, "hp", what, allowZero: false);
             Fix damage = ReadStat(item, "damage", what, allowZero: true);
@@ -323,9 +306,54 @@ namespace NovaFaction.Sim.Content
                 throw leaderValue.Error(what + "isLeader must be true exactly when slot is \"leader\".");
             }
 
+            // Only ground units that fight anything stop at mines; a flyer or a structure hunter never does.
+            bool mayCapture = !isFlying && priority == TargetPriority.Any;
+            bool canCapture = mayCapture;
+            if (item.TryGet(KeyCanCapture, out JsonValue captureValue))
+            {
+                canCapture = captureValue.AsBool();
+                if (canCapture && !mayCapture)
+                {
+                    throw captureValue.Error(what + "canCapture may only be true for ground units with targetPriority \"any\".");
+                }
+            }
+
             bool placeholder = item.TryGet(KeyPlaceholder, out JsonValue p) && p.AsBool();
             return new UnitDefinition(index, id, displayName, slot, cost, hp, damage, interval, range, moveSpeed,
-                targets, priority, isFlying, spawnCount, projectileSpeed, splashRadius, isLeader, placeholder);
+                targets, priority, isFlying, spawnCount, projectileSpeed, splashRadius, isLeader, canCapture, placeholder);
+        }
+
+        internal static int ReadCost(JsonValue item, string what)
+        {
+            JsonValue costValue = item.Get("cost");
+            int cost = costValue.AsInt();
+            if (cost < MinCost || cost > MaxCost)
+            {
+                throw costValue.Error(what + "cost must be between " + MinCost + " and " + MaxCost + " but is " + cost + ".");
+            }
+            return cost;
+        }
+
+        internal static string ReadId(JsonValue item)
+        {
+            JsonValue idValue = item.Get("id");
+            string id = idValue.AsString();
+            if (!MapDefinition.IsValidId(id))
+            {
+                throw idValue.Error("id must be 1-64 characters of a-z, 0-9, '_' or '-'.");
+            }
+            return id;
+        }
+
+        internal static string ReadDisplayName(JsonValue item, string what)
+        {
+            JsonValue nameValue = item.Get("displayName");
+            string displayName = nameValue.AsString();
+            if (displayName.Trim().Length == 0)
+            {
+                throw nameValue.Error(what + "displayName must not be empty.");
+            }
+            return displayName;
         }
 
         internal static int ReadName(JsonValue value, string[] names, string what)

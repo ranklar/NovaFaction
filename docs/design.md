@@ -24,8 +24,9 @@ Themed factions released over time as content packs; fantasy faction first.
   gold mines (neutral, capturable, extra income, capped) and gold chests (spawn on the
   field, collected by walking a unit over them). Target: active player earns ~1/3 more than a turtle.
   Implemented Sept 2026; see "Map gold" under Technical architecture for the rules and the arithmetic.
-- Stored gold caps at 10. Unit costs 1-7.
-- Deck of 8 = 1 leader + 7 cards. Hand of 4, next card visible. Cycle order shuffled from
+- Stored gold caps at 10. Card costs 1-7.
+- Cards are units or spells (implemented Sept 2026; see "Spells"). Spells can be cast anywhere on the map.
+- Deck of 8 = 1 leader + 7 cards (units and spells mixed freely). Hand of 4, next card visible. Cycle order shuffled from
   the match seed, then loops.
 - Leader deploys like a unit; carries the faction passive and an active ability on cooldown.
 - 1s spawn delay on deploy. Deploy zones are map data (own side + around held structures).
@@ -122,8 +123,8 @@ Themed factions released over time as content packs; fantasy faction first.
     (empty hand slot, not enough gold, target not deployable) are deterministic no-ops that only
     increase the player's IgnoredDeploys counter, which is in the state hash.
   - Simulation.Tick(commands) order: validate, record in the CommandLog, apply commands in
-    canonical order, create units of zero-delay deploys, combat and movement (see "Combat and match
-    resolution"), resolve Keep kills and sudden-death damage, mine capture then chest collection (see
+    canonical order, create units of zero-delay deploys, combat, spells and movement (see "Combat and match
+    resolution" and "Spells"), resolve Keep kills and sudden-death damage, mine capture then chest collection (see
     "Map gold"), accrue income (base plus mines, multiplied in sudden death), advance tick and clock;
     then, unless the match just ended, create units whose spawn delay is over, spawn a due chest wave,
     and handle clock expiry.
@@ -140,17 +141,19 @@ Themed factions released over time as content packs; fantasy faction first.
   - State hash: 64-bit FNV-1a over little-endian bytes, starting with a hash format version.
     Covers tick, RNG state, clock, phase, winner, end reason, tie-break rule, and per player: gold
     raw, income carry, mine income carry, score, gold from map, command count, ignored deploys, the
-    deck's unit-data content hash, hand slots and draw queue. Then the map, the structures file's
+    deck's card catalog content hash (units and spells), hand slots and draw queue. Then the map, the structures file's
     content hash, every structure's combat state (index order: index, hp, attack cooldown, target unit
     id), the next unit id, every unit (id order: id, owner, card id, position, hp, state, objective,
     target kind and id, attack cooldown), every pending spawn (deploy order), the next projectile id and
     every projectile (id order: id, owner, position, target, aim point, speed per tick, damage, splash
     radius, target layer), every mine (index order: index, owner, capturing player, capture progress
-    ticks) and every chest spawn (index order: index, chest present). Hash format version is 5.
+    ticks), every chest spawn (index order: index, chest present), the next spell id, every pending spell
+    and then every active spell zone (both in id order: id, owner, spell id, target, land tick, end tick,
+    pulse interval). Unit state includes Capturing. Hash format version is 6.
     New state implements IStateHashable and appends count-then-items in id order.
     A test pins the hash of a scripted full match on the small test map with fixed inline rules and
-    structure stats (it includes kills, projectiles, chest pickups by both players and a Keep kill);
-    change it only on purpose.
+    structure stats (it includes kills, projectiles, chest pickups by both players, Fireball casts and a
+    Keep kill); change it only on purpose.
   - Replay = rules + seed + CommandLog (Simulation.Replay). The log is in memory only for now.
   - Replay file format (decided Sept 2026, not implemented yet): compact, versioned binary.
     Header: replay format version, sim version, content version, rules version, seed, map id (plus
@@ -207,24 +210,27 @@ Themed factions released over time as content packs; fantasy faction first.
     block in front of the fallen tower's half of the field.
 - Units, decks and movement (sim/NovaFaction.Sim/Content, Cards, Units):
   - Unit files: content/factions/<faction>/units.json with formatVersion (1), faction (id), units.
-    Each unit: id (a-z 0-9 _ -, unique in the file), displayName, slot (tank, bruiser, swarm, ranged,
-    flyer, siege, support, spell, building, leader), cost (whole number 1-7), hp (> 0), damage (>= 0),
+    Each unit: id (a-z 0-9 _ -, unique across the faction's units and spells), displayName, slot (tank,
+    bruiser, swarm, ranged, flyer, siege, support, building, leader; "spell" is rejected because spell cards
+    live in spells.json), cost (whole number 1-7), hp (> 0), damage (>= 0),
     attackIntervalSeconds (> 0), range (> 0), moveSpeed (>= 0), targets (ground, air, both),
     targetPriority (any = enemy units and structures, structuresOnly), isFlying, spawnCount (1-25),
     isLeader (must be true exactly when slot is leader). Optional: projectileSpeed (> 0; present =
-    ranged, absent = melee), splashRadius (> 0; absent = single target), "placeholder": true marks
-    numbers that are guesses. Unknown keys are errors. The file's content
+    ranged, absent = melee), splashRadius (> 0; absent = single target), canCapture (see "Map gold"),
+    "placeholder": true marks numbers that are guesses. Unknown keys are errors. The file's content
     hash (from parsed data) is part of the state hash.
-  - content/factions/fantasy/units.json: 8 placeholder units, one per requested job: stone_golem
+  - content/factions/fantasy/units.json: 7 placeholder units, one per requested job: stone_golem
     (tank), knight (bruiser), goblin_pack (swarm of 4), elf_archer (ranged), griffin (flyer),
-    catapult (siege), fire_spirit (spell stand-in, a fast 1 HP unit until real spells exist) and
-    warlord (leader). Every number is a placeholder. Ranged: elf_archer (projectile 10/s) and catapult
-    (6/s). Splash: catapult (1.25) and fire_spirit (1.5, melee). Structures only: stone_golem and
-    catapult.
+    catapult (siege) and warlord (leader). The fire_spirit spell stand-in was removed in Sept 2026 when the
+    Fireball spell replaced it. Every number is a placeholder. Ranged: elf_archer (projectile 10/s) and
+    catapult (6/s). Splash: catapult (1.25). Structures only: stone_golem and catapult. Capturers (by the
+    default rule): knight, goblin_pack, elf_archer, warlord.
   - Range is measured from the unit's center to the nearest point of the target's footprint, so
     melee units use a small positive range (0.5).
-  - Deck: exactly deckSize (8) different card ids from one roster, exactly one of them a leader
-    (no duplicate cards). Stored sorted by id, so the order a player lists cards never matters.
+  - Deck: exactly deckSize (8) different card ids from one faction's card catalog (units.json plus
+    spells.json), exactly one of them a leader unit (no duplicate cards). Unit and spell cards mix freely.
+    Stored sorted by id, so the order a player lists cards never matters. The default test deck is the 7
+    units plus Fireball.
     Unit levels are not part of the deck yet; they arrive with progression and belong in the replay
     header.
   - Hand: at match start player 0's deck is shuffled with the match RNG, then player 1's. The first
@@ -233,7 +239,8 @@ Themed factions released over time as content packs; fantasy faction first.
     back of the queue. Slots are never empty under current rules; the sim supports an empty slot
     (deploys from it are rejected) for future rules.
   - Deploy: valid when the slot holds a card, gold >= cost, and the target is deployable for that
-    player now (base or unlocked zones, walkable cell). Commands apply in canonical order, so a
+    player now (base or unlocked zones, walkable cell). For a spell card the target only has to be on the
+    map (see "Spells"). Commands apply in canonical order, so a
     second deploy in the same tick sees the gold the first one spent. A valid deploy pays, cycles
     the hand and queues a pending spawn for deploy tick + delay ticks. With a delay of D > 0 ticks the
     units are in the state once State.Tick reaches deploy tick + D, in the Spawning state, unmoved.
@@ -244,12 +251,12 @@ Themed factions released over time as content packs; fantasy faction first.
     formations face the enemy the same way. A position on a blocked cell moves to the nearest
     walkable cell center within 3 cells (ties: lower row, then left), else to the deploy target.
   - Units: id (from 1, never reused), owner, card, position, hp, state (Spawning, Moving, Holding,
-    Attacking), objective (structure index or none), target (enemy unit id, structure index or none)
+    Attacking, Capturing), objective (structure index or none), target (enemy unit id, structure index or none)
     and attack cooldown. Stored in id order. Holding now means "nothing it can attack" (e.g. no enemy
     structure left); a unit in range of its target is Attacking.
-    The client reads MatchState.Units, Structures, Projectiles, PendingSpawns, Mines, Chests,
-    Winner/EndReason and each player's Cards (Hand, NextCard, Queue), Gold and GoldFromMap; only the
-    sim can change them.
+    The client reads MatchState.Units, Structures, Projectiles, PendingSpawns, PendingSpells, SpellZones,
+    Mines, Chests, Winner/EndReason and each player's Cards (Hand, NextCard, Queue; each card has a Kind,
+    Unit or Spell), Gold and GoldFromMap; only the sim can change them.
   - Movement runs in two passes so update order cannot matter: every unit decides state, target,
     objective and velocity from the positions at the start of the tick, then moving units step
     (targeting details in "Combat and match resolution").
@@ -329,12 +336,13 @@ Themed factions released over time as content packs; fantasy faction first.
     within the radius of the impact point, and every enemy structure whose footprint is. Priority does
     not matter for splash (a structuresOnly catapult's splash still hurts units). No friendly fire.
   - Tick order inside combat: cooldowns; unit decisions; structure decisions; projectiles in flight
-    move and arrive; units then structures attack; all hits apply in that order (projectile id, unit
-    id, structure index); moving units that are still alive step; units at 0 HP are removed; targets
+    move and arrive; spell zones pulse and due spells land (see "Spells"); units then structures attack;
+    all hits apply in that order (projectile id, spell hits, unit id, structure index); moving units that are still alive step; units at 0 HP are removed; targets
     pointing at removed units or destroyed structures are cleared. All hits in a tick are
     simultaneous: a unit killed this tick still gets its attack.
   - Score: HP actually removed from enemy structures (a hit is capped by the HP left) plus the
-    structure's destructionBonus when it falls. Killing units scores nothing.
+    structure's destructionBonus when it falls. Spell damage counts like any other damage (also for
+    sudden-death first damage). Killing units scores nothing.
   - Resolution (MatchState.Winner 0/1 or -1, EndReason, TieBreakRule):
     - A Keep destroyed: Ended at once, the attacker wins (KeepDestroyed), whatever the score. If both
       Keeps fall on the same tick: the higher score wins (Score), else the tie-break list.
@@ -386,7 +394,7 @@ Themed factions released over time as content packs; fantasy faction first.
   - Placeholder values and the 1/3 target (twolane, 3:00, base income 0.35/s):
     - a turtle earns 0.35 * 180 = 63 gold;
     - mines: mineIncomePerSecond 0.05, mineIncomeCap 0.1 (both mines). Allowing for walking there,
-      the 5 s capture (mineCaptureSeconds) and losing a mine now and then, assume both are held for
+      the 4 s capture (mineCaptureSeconds) and losing a mine now and then, assume both are held for
       about 120 s: 0.1 * 120 = 12 gold;
     - chests: waves at 30, 60, 90, 120 and 150 s (chestFirstSpawnSeconds 30, chestSpawnIntervalSeconds
       30) at 4 spawn points = at most 20 chests in regulation; an active player who takes 12 of them
@@ -394,9 +402,59 @@ Themed factions released over time as content packs; fantasy faction first.
     - 12 + 9 = 21 = 63 / 3, so the active player banks about 84 against the turtle's 63, if they keep
       spending so the cap does not swallow it.
     - mineCaptureRadius 1.5 (cells next to the mine, diagonals included) and chestCollectRadius 0.75
-      (a unit walking through the spawn cell) are feel values. At walking speed a unit spends only 3-4 s
-      inside the capture radius, so a mine needs a unit that stops there or a steady stream. Tune all
-      eight in the headless harness.
+      (a unit walking through the spawn cell) are feel values. Capturing units stop at a mine they pass (see
+      below), so one unit is enough. Tune all eight in the headless harness.
+  - Capture behavior (decided and implemented Sept 2026): units with canCapture stop at mines they pass.
+    - canCapture (units.json, optional): defaults to true for ground units with targetPriority any and false
+      otherwise. It may be set to false for any unit; setting it to true for a flyer or a structures-only unit
+      is a load error.
+    - Each tick, a capturer that finds no enemy to attack (the normal target scan within its scan radius comes
+      up empty) and whose center is within mineCaptureRadius of a mine its player does not own (neutral or
+      the enemy's) is Capturing: it stands still with no target and does not move. A moving capturer that
+      comes within the radius stops on that same tick, like a unit arriving at its target.
+    - It stays until its player owns the mine; on the next tick it walks on toward its objective. Units never
+      turn toward a mine; they only stop when their normal path takes them within the radius.
+    - Combat first: an enemy it may attack (a unit it can hit, or an enemy structure) within its scan radius
+      makes it fight as usual. When the fight ends it re-decides: still within the radius of a mine it does
+      not own, it captures again; otherwise it goes on toward its objective. An enemy it cannot hit (a flyer
+      over a ground-only knight) does not interrupt it but still contests the mine, which pauses progress.
+    - The capture itself is unchanged: presence still counts every unit near the mine, flyers and
+      non-capturers included (they just do not stop). A Capturing unit counts as stopped for separation.
+    - mineCaptureSeconds reduced from 5 to 4 (placeholder).
+- Spells (sim/NovaFaction.Sim/Content/SpellBook.cs, CardCatalog.cs, Spells/, implemented Sept 2026):
+  - Card model: a card is a unit card (UnitDefinition, units.json) or a spell card (SpellDefinition,
+    spells.json); both derive from CardDefinition (id, displayName, cost, kind, slot, isLeader, placeholder).
+    Only units can be leaders. CardCatalog joins a faction's two files: the factions must match and card ids
+    must be unique across both (a clash is an error pointing into spells.json). Its content hash (both files'
+    parsed data) replaces the unit roster hash in the state hash.
+  - content/factions/<faction>/spells.json: formatVersion (1), faction, spells (may be empty). Each spell: id,
+    displayName, cost (whole number 1-7), radius (> 0), damage (>= 0, per hit), castDelaySeconds (>= 0; the
+    spell lands this long after the cast), durationSeconds (>= 0; 0 = instant, one hit), targets (ground, air,
+    both). Optional: zoneTickSeconds (required when durationSeconds > 0, not allowed when it is 0; > 0 and at
+    most durationSeconds), structureDamageMultiplier (>= 0, default 0.35, placeholder), placeholder. Unknown
+    keys are errors. Times are at most 600 s and must be whole ticks at the match's tick rate (MatchSetup
+    checks this for spells in the decks, like the spawn delay).
+  - content/factions/fantasy/spells.json (all numbers placeholders): fireball (cost 4, radius 2.5, 325 damage,
+    lands after 1 s, instant, both layers) and blizzard (cost 3, radius 3, 30 damage every 0.5 s for 4 s,
+    lands after 0.5 s, both layers; 8 pulses, 240 damage in total). Both use the 0.35 structure multiplier, so
+    a Fireball removes about 113.75 structure HP.
+  - Casting: DeployCard with a spell card is valid when the slot holds it, gold >= cost, and the target is
+    inside the map rectangle (0 <= x < width * cellSize, same for y; blocked cells, the river, mines and
+    structures included; deploy zones do not matter). A valid cast pays, cycles the hand like a unit card, and
+    adds a pending spell (MatchState.PendingSpells: id from 1 in cast order, owner, spell, target, land tick =
+    cast tick + delay in ticks, end tick = land tick + duration in ticks, pulse interval in ticks).
+  - Resolution, inside the combat step after projectiles move and before units attack: first every active
+    zone (MatchState.SpellZones, id order) due a pulse hits; then every pending spell whose land tick has come
+    (id order) hits. A zero-delay spell lands on its cast tick. An instant spell is then gone; a zone joins
+    the zone list (its landing hit is its first pulse) and pulses on land tick + k * interval while before
+    its end tick, and is removed after its last active tick (end tick - 1). So a 4 s zone with 0.5 s pulses
+    hits 8 times.
+  - A spell hit damages every enemy unit it may hit (targets, same rule as attacks) whose center is within
+    radius of the target, and every standing enemy structure whose footprint is within radius (unless the
+    spell is air only), at damage * structureDamageMultiplier. Positions are the start of the tick, as for
+    splash. No friendly fire. Structure damage scores, destroys structures (bonus, unlocked zones) and counts
+    as sudden-death first damage exactly like attack damage. Spells use no randomness.
+  - Decks keep 8 cards with exactly one leader; the fire_spirit unit is gone (Fireball replaces it).
 - server/: ASP.NET Core (C#). Accounts, economy, matchmaking, input relay, match verification by
   re-running the sim. PostgreSQL. Runs on the Windows desktop for LAN testing; cloud container later.
 - content/: JSON data for units, factions, maps, missions. Art in Addressables bundles per theme.
@@ -420,8 +478,9 @@ Themed factions released over time as content packs; fantasy faction first.
 - Unit levels: where they come from and how they scale stats (~5-7% per level) in the sim.
 - Enemy units do not block or push each other (decided to leave as is with combat; revisit if fights
   look wrong on the phone).
-- Real spells: fire_spirit stands in for the spell slot as a unit (it keeps attacking; it does not
-  die on its first hit as a Clash Royale fire spirit would).
+- Spell numbers (cost, radius, damage, delays, the 0.35 structure multiplier) are placeholders; tune in the
+  headless harness. The bot does not cast spells yet. Spells have no travel visual data yet (the client can
+  animate the cast delay from PendingSpells' land tick).
 - Keep activation: the Keep shoots from the start. Clash Royale only wakes the king tower once it is
   hit or a tower falls; decide when tuning.
 - Combat numbers (structure HP/damage/range, aggro radius, stopped push, crowd penalty) are
@@ -429,8 +488,11 @@ Themed factions released over time as content packs; fantasy faction first.
   the headless harness.
 - Map gold numbers (all eight rules.json values) are placeholders built on the arithmetic in "Map gold";
   check in the headless harness that an active bot really earns ~1/3 more than a turtle.
-- Units have no reason to go to a mine or chest on their own (their objective is always a structure).
-  The bot, and later mission design, must deploy toward them on purpose. Revisit if players find
-  mines hard to hold.
+- Units still never walk to a mine or chest on purpose (their objective is always a structure); since
+  Sept 2026 capturers stop at mines they happen to pass. The bot, and later mission design, must deploy
+  toward mines on purpose. Revisit if players find mines hard to hold.
+- Capture stops can hold a unit at a contested mine for good when the enemy there is one it cannot hit or
+  reach (for example an enemy flyer hovering over the mine next to a ground-only knight). Decide when tuning
+  whether a capturer should give up after a while.
 - Crowding at structures (fixed Sept 2026 with the weak stopped push and sideways slide): a busy
   scripted battle test requires that every living unit is Attacking or Holding at the end.

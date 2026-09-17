@@ -14,6 +14,11 @@ namespace NovaFaction.Sim.Units
         Holding = 2,
         /// <summary>Its target is in range: standing still and attacking every attack interval.</summary>
         Attacking = 3,
+        /// <summary>
+        /// Standing next to a gold mine its player does not own, until the player owns it. Only units with
+        /// canCapture do this, and only while no enemy they may attack is within their scan radius.
+        /// </summary>
+        Capturing = 4,
     }
 
     /// <summary>

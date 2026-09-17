@@ -7,6 +7,7 @@ using NovaFaction.Sim.Content;
 using NovaFaction.Sim.Economy;
 using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
+using NovaFaction.Sim.Spells;
 using NovaFaction.Sim.Units;
 
 namespace NovaFaction.Sim
@@ -44,8 +45,8 @@ namespace NovaFaction.Sim
         /// <summary>
         /// Advances one tick. Every command must be stamped with <c>State.Tick</c> and be well-formed
         /// (see <see cref="Command.Validate"/>); otherwise this throws and the state is unchanged.
-        /// Order of work: apply commands (canonical order), create units of zero-delay deploys, run combat
-        /// and movement (<see cref="BattleSystem"/>), resolve Keep kills and sudden-death damage, update mine
+        /// Order of work: apply commands (canonical order), create units of zero-delay deploys, run combat,
+        /// spells and movement (<see cref="BattleSystem"/>), resolve Keep kills and sudden-death damage, update mine
         /// capture and collect chests (<see cref="MapGoldSystem"/>), accrue income (base and mines), advance the
         /// tick and clock, then (unless the match just ended) create units whose spawn delay is over, spawn a due
         /// chest wave and handle clock expiry. A deploy on tick N with a delay of D ticks therefore creates its
@@ -137,24 +138,42 @@ namespace NovaFaction.Sim
         }
 
         /// <summary>
-        /// A deploy is valid when the hand slot holds a card, the player has at least its cost in gold,
-        /// and the target is deployable for the player right now. Invalid deploys only bump
-        /// <see cref="PlayerState.IgnoredDeploys"/>. A valid deploy pays, cycles the hand and queues the spawn.
+        /// A deploy is valid when the hand slot holds a card, the player has at least its cost in gold, and the target
+        /// is allowed: for a unit card, deployable for the player right now; for a spell card, anywhere on the map.
+        /// Invalid deploys only bump <see cref="PlayerState.IgnoredDeploys"/>. A valid deploy pays, cycles the hand and
+        /// queues the spawn or the spell.
         /// </summary>
         private void DeployCard(PlayerState player, Command command)
         {
-            UnitDefinition? card = player.Cards.GetSlot(command.HandSlot);
-            if (card == null
-                || player.Gold < Fix.FromInt(card.Cost)
-                || !State.Map.IsDeployable(player.Index, command.Target))
+            CardDefinition? card = player.Cards.GetSlot(command.HandSlot);
+            bool targetOk = card is SpellDefinition
+                ? IsOnMap(command.Target)
+                : State.Map.IsDeployable(player.Index, command.Target);
+            if (card == null || player.Gold < Fix.FromInt(card.Cost) || !targetOk)
             {
                 player.IgnoredDeploys++;
                 return;
             }
             player.Gold -= Fix.FromInt(card.Cost);
             player.Cards.Play(command.HandSlot);
-            State.PendingSpawnList.Add(new PendingSpawn(State.Tick + Rules.DeploySpawnDelayTicks, player.Index, card,
-                command.Target));
+            if (card is SpellDefinition spell)
+            {
+                int pulse = spell.IsZone ? Rules.SecondsToTicks(spell.ZoneTickSeconds) : 0;
+                State.PendingSpellList.Add(new SpellInstance(State.NextSpellId++, player.Index, spell, command.Target,
+                    State.Tick + Rules.SecondsToTicks(spell.CastDelaySeconds), Rules.SecondsToTicks(spell.DurationSeconds),
+                    pulse)); // ids only grow, so the list stays sorted
+                return;
+            }
+            State.PendingSpawnList.Add(new PendingSpawn(State.Tick + Rules.DeploySpawnDelayTicks, player.Index,
+                (UnitDefinition)card, command.Target));
+        }
+
+        /// <summary>Inside the map rectangle (blocked cells and structures included).</summary>
+        private bool IsOnMap(FixVector2 position)
+        {
+            Fix width = Fix.FromInt(Map.Width) * Map.CellSize;
+            Fix height = Fix.FromInt(Map.Height) * Map.CellSize;
+            return position.X >= Fix.Zero && position.X < width && position.Y >= Fix.Zero && position.Y < height;
         }
 
         /// <summary>Creates the units of every pending deploy that is due, in deploy order.</summary>

@@ -1,0 +1,31 @@
+{
+  "formatVersion": 1,
+  "faction": "fantasy",
+  "spells": [
+    {
+      "id": "fireball",
+      "displayName": "Fireball",
+      "cost": 4,
+      "radius": 2.5,
+      "damage": 325,
+      "castDelaySeconds": 1,
+      "durationSeconds": 0,
+      "targets": "both",
+      "structureDamageMultiplier": 0.35,
+      "placeholder": true
+    },
+    {
+      "id": "blizzard",
+      "displayName": "Blizzard",
+      "cost": 3,
+      "radius": 3,
+      "damage": 30,
+      "castDelaySeconds": 0.5,
+      "durationSeconds": 4,
+      "zoneTickSeconds": 0.5,
+      "targets": "both",
+      "structureDamageMultiplier": 0.35,
+      "placeholder": true
+    }
+  ]
+}

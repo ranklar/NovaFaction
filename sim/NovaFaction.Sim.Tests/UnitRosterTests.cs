@@ -31,13 +31,14 @@ public class UnitRosterTests
         UnitRoster roster = TestSim.LoadFantasy();
 
         Assert.Equal("fantasy", roster.Faction);
-        Assert.Equal(8, roster.Units.Count);
-        Assert.Equal(TestSim.DefaultDeckIds, roster.Units.Select(u => u.Id));
+        Assert.Equal(7, roster.Units.Count);
+        Assert.Equal(TestSim.DefaultDeckIds.Where(id => id != "fireball"), roster.Units.Select(u => u.Id));
         Assert.Equal(new[]
         {
             UnitSlot.Tank, UnitSlot.Bruiser, UnitSlot.Swarm, UnitSlot.Ranged,
-            UnitSlot.Flyer, UnitSlot.Siege, UnitSlot.Spell, UnitSlot.Leader,
+            UnitSlot.Flyer, UnitSlot.Siege, UnitSlot.Leader,
         }, roster.Units.Select(u => u.Slot));
+        Assert.All(roster.Units, u => Assert.Equal(CardKind.Unit, u.Kind));
         Assert.Single(roster.Units, u => u.IsLeader);
         Assert.All(roster.Units, u =>
         {
@@ -58,10 +59,13 @@ public class UnitRosterTests
         Assert.Equal(Fix.Parse("1.3"), griffin.AttackIntervalSeconds);
         Assert.Equal(Fix.Parse("1.5"), griffin.MoveSpeed);
 
-        // Combat data: only the archer and the catapult shoot; the catapult and the fire spirit splash; the
-        // golem and the catapult only go for structures.
+        // Combat data: only the archer and the catapult shoot; only the catapult splashes; the golem and the catapult
+        // only go for structures.
         Assert.Equal(new[] { "elf_archer", "catapult" }, roster.Units.Where(u => u.IsRanged).Select(u => u.Id));
-        Assert.Equal(new[] { "catapult", "fire_spirit" }, roster.Units.Where(u => u.SplashRadius > Fix.Zero).Select(u => u.Id));
+        Assert.Equal(new[] { "catapult" }, roster.Units.Where(u => u.SplashRadius > Fix.Zero).Select(u => u.Id));
+        // Mine capture follows the default rule: ground units that fight anything.
+        Assert.Equal(new[] { "knight", "goblin_pack", "elf_archer", "warlord" },
+            roster.Units.Where(u => u.CanCapture).Select(u => u.Id));
         Assert.Equal(new[] { "stone_golem", "catapult" },
             roster.Units.Where(u => u.TargetPriority == TargetPriority.StructuresOnly).Select(u => u.Id));
         Assert.True(roster.Get("elf_archer").ProjectileSpeed > Fix.Zero);
@@ -94,6 +98,7 @@ public class UnitRosterTests
         Assert.False(grunt.IsRanged);
         Assert.Equal(Fix.Zero, grunt.ProjectileSpeed);
         Assert.Equal(Fix.Zero, grunt.SplashRadius);
+        Assert.True(grunt.CanCapture); // a ground unit that targets anything captures by default
 
         UnitDefinition shooter = UnitRoster.FromJson(OneUnitJson(DefaultUnitBody.Replace("\"any\"", "\"structuresOnly\"")
             + ",\n      \"projectileSpeed\": 7.5,\n      \"splashRadius\": 1")).Units[0];
@@ -101,6 +106,29 @@ public class UnitRosterTests
         Assert.True(shooter.IsRanged);
         Assert.Equal(Fix.Parse("7.5"), shooter.ProjectileSpeed);
         Assert.Equal(Fix.One, shooter.SplashRadius);
+    }
+
+    [Theory]
+    [InlineData("\"isFlying\": false", "\"isFlying\": false", false, true)]
+    [InlineData("\"isFlying\": false", "\"isFlying\": false, \"canCapture\": true", false, true)]
+    [InlineData("\"isFlying\": false", "\"isFlying\": false, \"canCapture\": false", false, false)]
+    [InlineData("\"isFlying\": false", "\"isFlying\": true", false, false)]
+    [InlineData("\"isFlying\": false", "\"isFlying\": true, \"canCapture\": false", false, false)]
+    [InlineData("\"targetPriority\": \"any\"", "\"targetPriority\": \"structuresOnly\"", false, false)]
+    [InlineData("\"targetPriority\": \"any\"", "\"targetPriority\": \"structuresOnly\", \"canCapture\": false", false, false)]
+    [InlineData("\"isFlying\": false", "\"isFlying\": true, \"canCapture\": true", true, false)]
+    [InlineData("\"targetPriority\": \"any\"", "\"targetPriority\": \"structuresOnly\", \"canCapture\": true", true, false)]
+    public void CanCapture_DefaultsAndValidation(string original, string replacement, bool rejected, bool expected)
+    {
+        string json = OneUnitJson().Replace(original, replacement);
+        if (rejected)
+        {
+            var ex = Assert.Throws<SimJsonException>(() => UnitRoster.FromJson(json));
+            Assert.Contains("canCapture may only be true for ground units with targetPriority \"any\"", ex.Message);
+            Assert.True(ex.Line > 0);
+            return;
+        }
+        Assert.Equal(expected, UnitRoster.FromJson(json).Units[0].CanCapture);
     }
 
     [Fact]
@@ -114,6 +142,9 @@ public class UnitRosterTests
         Assert.NotEqual(hash, UnitRoster.FromJson(json.Replace("\"any\"", "\"structuresOnly\"")).ContentHash);
         Assert.NotEqual(hash, UnitRoster.FromJson(json.Replace("\"isLeader\": false", "\"isLeader\": false, \"projectileSpeed\": 5")).ContentHash);
         Assert.NotEqual(hash, UnitRoster.FromJson(json.Replace("\"isLeader\": false", "\"isLeader\": false, \"splashRadius\": 5")).ContentHash);
+        Assert.NotEqual(hash, UnitRoster.FromJson(json.Replace("\"isLeader\": false", "\"isLeader\": false, \"canCapture\": false")).ContentHash);
+        // Writing the default explicitly changes nothing.
+        Assert.Equal(hash, UnitRoster.FromJson(json.Replace("\"isLeader\": false", "\"isLeader\": false, \"canCapture\": true")).ContentHash);
     }
 
     [Fact]
@@ -129,6 +160,8 @@ public class UnitRosterTests
     [Theory]
     [InlineData("\"slot\": \"bruiser\"", "\"slot\": \"wizard\"", "slot must be one of")]
     [InlineData("\"slot\": \"bruiser\"", "\"slot\": \"Bruiser\"", "slot must be one of")]
+    [InlineData("\"slot\": \"bruiser\"", "\"slot\": \"spell\"", "belong in spells.json")]
+    [InlineData("\"isFlying\": false", "\"isFlying\": false, \"canCapture\": 1", "expected")]
     [InlineData("\"cost\": 3", "\"cost\": 0", "cost must be between 1 and 7")]
     [InlineData("\"cost\": 3", "\"cost\": 8", "cost must be between 1 and 7")]
     [InlineData("\"cost\": 3", "\"cost\": 3.5", "whole number")]

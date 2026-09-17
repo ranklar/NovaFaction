@@ -105,7 +105,7 @@ public class DeployTests
         Simulation sim = NewSim(start: "10");
         PlayerState p0 = sim.State.GetPlayer(0);
         int slot = TestSim.EnsureInHand(p0, "knight"); // costs 4
-        UnitDefinition knight = p0.Cards.Hand[slot]!;
+        CardDefinition knight = p0.Cards.Hand[slot]!;
         string nextBefore = p0.Cards.NextCard.Id;
 
         sim.Tick(new[] { DeployCmd(sim, 0, slot, OpenP0) });

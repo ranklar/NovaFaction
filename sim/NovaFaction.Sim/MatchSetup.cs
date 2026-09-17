@@ -32,6 +32,7 @@ namespace NovaFaction.Sim
                     throw new ArgumentException("Every deck must have " + rules.DeckSize + " cards.");
                 }
                 CheckSpeeds(deck);
+                CheckSpellTimes(deck);
             }
             // A mine's own cell is blocked, so units can only stand next to it: the radius must reach that far.
             if (map.Mines.Count > 0 && rules.MineCaptureRadius < map.CellSize)
@@ -63,13 +64,35 @@ namespace NovaFaction.Sim
             // Moving neighbors push up to the base strength; stopped neighbors add up to (stopped factor) backward
             // plus a full-strength sideways slide. (2 + factor) times the base bounds the total.
             Fix maxPush = Rules.UnitSeparationPushPerSecond * (Fix.FromInt(2) + Rules.UnitStoppedPushFactor);
-            foreach (UnitDefinition card in deck.Cards)
+            foreach (CardDefinition entry in deck.Cards)
             {
+                if (!(entry is UnitDefinition card))
+                {
+                    continue;
+                }
                 if (card.MoveSpeed + maxPush > limit)
                 {
                     throw new ArgumentException("Unit \"" + card.Id + "\" moves too fast for this map and tick rate: "
                         + "moveSpeed + unitSeparationPushPerSecond * (2 + unitStoppedPushFactor) must be at most "
                         + limit + " world units per second.");
+                }
+            }
+        }
+
+        /// <summary>Spell delays, durations and pulse intervals must be whole ticks, like the spawn delay.</summary>
+        private void CheckSpellTimes(Deck deck)
+        {
+            foreach (CardDefinition entry in deck.Cards)
+            {
+                if (!(entry is SpellDefinition spell))
+                {
+                    continue;
+                }
+                if (!Rules.IsWholeTicks(spell.CastDelaySeconds) || !Rules.IsWholeTicks(spell.DurationSeconds)
+                    || !Rules.IsWholeTicks(spell.ZoneTickSeconds))
+                {
+                    throw new ArgumentException("Spell \"" + spell.Id + "\": castDelaySeconds, durationSeconds and "
+                        + "zoneTickSeconds must each be a whole number of ticks (a multiple of 1/" + Rules.TicksPerSecond + " s).");
                 }
             }
         }

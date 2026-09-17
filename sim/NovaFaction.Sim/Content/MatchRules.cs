@@ -127,6 +127,16 @@ namespace NovaFaction.Sim.Content
 
         private int ToTicks(Fix seconds) => Fix.FloorToInt(seconds * Fix.FromInt(TicksPerSecond));
 
+        /// <summary>True when the time is a whole number of ticks at this tick rate (and not absurdly long).</summary>
+        public bool IsWholeTicks(Fix seconds)
+        {
+            Fix ticks = seconds * Fix.FromInt(TicksPerSecond);
+            return ticks == Fix.Floor(ticks) && ticks <= Fix.FromInt(1_000_000);
+        }
+
+        /// <summary>A time that <see cref="IsWholeTicks"/> accepts, in ticks.</summary>
+        internal int SecondsToTicks(Fix seconds) => ToTicks(seconds);
+
         /// <summary>Parses and validates rules JSON. Throws <see cref="SimJsonException"/> on any problem.</summary>
         public static MatchRules FromJson(string json, string sourceName = DefaultSourceName)
         {

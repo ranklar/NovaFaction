@@ -5,35 +5,39 @@ using NovaFaction.Sim.Content;
 namespace NovaFaction.Sim.Cards
 {
     /// <summary>
-    /// A player's deck: deckSize (8) different cards from one faction, exactly one of them a leader.
+    /// A player's deck: deckSize (8) different cards (units and spells) from one faction, exactly one of them a
+    /// leader unit.
     /// Card ids are stored sorted (ordinal), so the listing order a player chose never affects the
     /// match: the cycle order depends only on which cards are in the deck and the match seed.
     /// </summary>
     public sealed class Deck
     {
-        private readonly UnitDefinition[] _cards;
+        private readonly CardDefinition[] _cards;
 
-        private Deck(UnitRoster roster, UnitDefinition[] cards)
+        private Deck(CardCatalog catalog, CardDefinition[] cards)
         {
-            Roster = roster;
+            Catalog = catalog;
             _cards = cards;
         }
 
-        /// <summary>The faction the cards come from.</summary>
-        public UnitRoster Roster { get; }
+        /// <summary>The faction's cards the deck was built from.</summary>
+        public CardCatalog Catalog { get; }
+
+        /// <summary>The faction's unit cards.</summary>
+        public UnitRoster Roster => Catalog.Units;
 
         /// <summary>The cards, sorted by id (ordinal).</summary>
-        public IReadOnlyList<UnitDefinition> Cards => _cards;
+        public IReadOnlyList<CardDefinition> Cards => _cards;
 
         public UnitDefinition Leader
         {
             get
             {
-                foreach (UnitDefinition card in _cards)
+                foreach (CardDefinition card in _cards)
                 {
                     if (card.IsLeader)
                     {
-                        return card;
+                        return (UnitDefinition)card;
                     }
                 }
                 throw new InvalidOperationException("A validated deck always has a leader.");
@@ -41,9 +45,9 @@ namespace NovaFaction.Sim.Cards
         }
 
         /// <summary>Builds a deck, throwing <see cref="ArgumentException"/> with the reason if it is invalid.</summary>
-        public static Deck Create(UnitRoster roster, IReadOnlyList<string> cardIds, int deckSize)
+        public static Deck Create(CardCatalog catalog, IReadOnlyList<string> cardIds, int deckSize)
         {
-            string? problem = Validate(roster, cardIds, deckSize);
+            string? problem = Validate(catalog, cardIds, deckSize);
             if (problem != null)
             {
                 throw new ArgumentException("Invalid deck: " + problem, nameof(cardIds));
@@ -54,20 +58,23 @@ namespace NovaFaction.Sim.Cards
                 sorted[i] = cardIds[i];
             }
             Array.Sort(sorted, StringComparer.Ordinal);
-            var cards = new UnitDefinition[sorted.Length];
+            var cards = new CardDefinition[sorted.Length];
             for (int i = 0; i < sorted.Length; i++)
             {
-                cards[i] = roster.Get(sorted[i]);
+                cards[i] = catalog.Get(sorted[i]);
             }
-            return new Deck(roster, cards);
+            return new Deck(catalog, cards);
         }
 
-        /// <summary>Returns null if the card list is a valid deck for the roster, otherwise the reason.</summary>
-        public static string? Validate(UnitRoster roster, IReadOnlyList<string?>? cardIds, int deckSize)
+        /// <summary>
+        /// Returns null if the card list is a valid deck for the faction, otherwise the reason. Unit and spell cards
+        /// mix freely; card costs and id uniqueness are already guaranteed by the catalog.
+        /// </summary>
+        public static string? Validate(CardCatalog catalog, IReadOnlyList<string?>? cardIds, int deckSize)
         {
-            if (roster == null)
+            if (catalog == null)
             {
-                throw new ArgumentNullException(nameof(roster));
+                throw new ArgumentNullException(nameof(catalog));
             }
             if (cardIds == null)
             {
@@ -81,9 +88,9 @@ namespace NovaFaction.Sim.Cards
             for (int i = 0; i < cardIds.Count; i++)
             {
                 string? id = cardIds[i];
-                if (id == null || !roster.TryGet(id, out UnitDefinition card))
+                if (id == null || !catalog.TryGet(id, out CardDefinition card))
                 {
-                    return "faction \"" + roster.Faction + "\" has no card \"" + id + "\".";
+                    return "faction \"" + catalog.Faction + "\" has no card \"" + id + "\".";
                 }
                 for (int j = 0; j < i; j++)
                 {

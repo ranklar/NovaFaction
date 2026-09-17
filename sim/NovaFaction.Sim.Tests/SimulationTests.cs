@@ -200,8 +200,8 @@ public class SimulationTests
     {
         var withCommands = TestSim.New(Rules, Map, 11);
         var without = TestSim.New(Rules, Map, 11);
-        // Inside the neutral river rows: nobody may deploy here, so both deploys are rejected.
-        var target = new FixVector2(Fix.FromInt(4), Fix.FromInt(15));
+        // Off the map: neither units nor spells may go there, so both deploys are rejected.
+        var target = new FixVector2(Fix.FromInt(-1), Fix.FromInt(15));
 
         withCommands.Tick(new[]
         {

@@ -45,7 +45,7 @@ public class MovementTests
     }
 
     public static IEnumerable<object[]> GroundCards() =>
-        new[] { "stone_golem", "knight", "goblin_pack", "elf_archer", "catapult", "fire_spirit", "warlord" }
+        new[] { "stone_golem", "knight", "goblin_pack", "elf_archer", "catapult", "warlord" }
             .SelectMany(id => new[] { new object[] { id, 0 }, new object[] { id, 1 } });
 
     [Theory]
@@ -58,8 +58,9 @@ public class MovementTests
         TestSim.Deploy(sim, player, cardId, target);
         UnitDefinition def = sim.State.PendingSpawns[0].Definition;
 
-        // About 16 world units of path from the drop point; allow 20 / speed seconds plus the spawn delay.
-        Fix limitSeconds = Fix.FromInt(20) / def.MoveSpeed + Fix.FromInt(1);
+        // About 16 world units of path from the drop point; allow 20 / speed seconds plus the spawn delay, plus one
+        // mine capture (the west lane passes the west mine, and a wide swarm may stop to take it).
+        Fix limitSeconds = Fix.FromInt(20) / def.MoveSpeed + Fix.FromInt(1) + sim.Rules.MineCaptureSeconds;
         int limitTicks = Fix.CeilToInt(limitSeconds * Fix.FromInt(20));
         int ticks = RunUntilAllStopped(sim, limitTicks);
         Assert.True(ticks > 0, cardId + " did not reach its objective within " + limitTicks + " ticks");

@@ -6,6 +6,7 @@ using NovaFaction.Sim.Content;
 using NovaFaction.Sim.Economy;
 using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
+using NovaFaction.Sim.Spells;
 using NovaFaction.Sim.Units;
 
 namespace NovaFaction.Sim
@@ -84,7 +85,7 @@ namespace NovaFaction.Sim
             hasher.Add(GoldFromMap);
             hasher.Add(CommandsReceived);
             hasher.Add(IgnoredDeploys);
-            hasher.Add(Deck.Roster.ContentHash);
+            hasher.Add(Deck.Catalog.ContentHash);
             hasher.AddHashable(Cards);
         }
     }
@@ -101,7 +102,8 @@ namespace NovaFaction.Sim
         // Version 4 added combat: result fields, gold collected, structure stats and state, unit targets and
         // cooldowns, and projectiles.
         // Version 5 added map gold: mine income carry, gold from map, mines and chests.
-        public const int HashFormatVersion = 5;
+        // Version 6 added spells (card catalog hash, pending spells, spell zones) and the Capturing unit state.
+        public const int HashFormatVersion = 6;
 
         /// <summary><see cref="Winner"/> value while nobody has won.</summary>
         public const int NoWinner = -1;
@@ -113,6 +115,8 @@ namespace NovaFaction.Sim
         private readonly List<Projectile> _projectiles = new List<Projectile>();
         private readonly MineState[] _mines;
         private readonly ChestState[] _chests;
+        private readonly List<SpellInstance> _pendingSpells = new List<SpellInstance>();
+        private readonly List<SpellInstance> _spellZones = new List<SpellInstance>();
 
         internal MatchState(ulong seed, MatchSetup setup)
         {
@@ -129,6 +133,7 @@ namespace NovaFaction.Sim
             };
             NextUnitId = 1;
             NextProjectileId = 1;
+            NextSpellId = 1;
             Winner = NoWinner;
             StructureCatalog = setup.Structures;
             _structures = new StructureState[setup.Map.Structures.Count];
@@ -181,6 +186,19 @@ namespace NovaFaction.Sim
 
         /// <summary>Chest spawn points and whether a chest waits at each, in the map's chest spawn order.</summary>
         public IReadOnlyList<ChestState> Chests => _chests;
+
+        /// <summary>Cast spells that have not landed yet, in id (cast) order.</summary>
+        public IReadOnlyList<SpellInstance> PendingSpells => _pendingSpells;
+
+        internal List<SpellInstance> PendingSpellList => _pendingSpells;
+
+        /// <summary>Landed zone spells that are still active, in id order.</summary>
+        public IReadOnlyList<SpellInstance> SpellZones => _spellZones;
+
+        internal List<SpellInstance> SpellZoneList => _spellZones;
+
+        /// <summary>The id the next cast spell will get. Ids start at 1 and are never reused.</summary>
+        public int NextSpellId { get; internal set; }
 
         /// <summary>Always two players, index 0 and 1.</summary>
         public IReadOnlyList<PlayerState> Players => _players;
@@ -294,6 +312,17 @@ namespace NovaFaction.Sim
             foreach (ChestState chest in _chests) // index order
             {
                 hasher.AddHashable(chest);
+            }
+            hasher.Add(NextSpellId);
+            hasher.Add(_pendingSpells.Count);
+            foreach (SpellInstance spell in _pendingSpells) // id order
+            {
+                hasher.AddHashable(spell);
+            }
+            hasher.Add(_spellZones.Count);
+            foreach (SpellInstance zone in _spellZones) // id order
+            {
+                hasher.AddHashable(zone);
             }
             // Future state is appended here: count first, then each item in id order.
         }

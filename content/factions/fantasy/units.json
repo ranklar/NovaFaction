@@ -108,24 +108,6 @@
       "placeholder": true
     },
     {
-      "id": "fire_spirit",
-      "displayName": "Fire Spirit",
-      "slot": "spell",
-      "cost": 2,
-      "hp": 1,
-      "damage": 300,
-      "attackIntervalSeconds": 1,
-      "range": 0.5,
-      "moveSpeed": 2,
-      "targets": "both",
-      "targetPriority": "any",
-      "isFlying": false,
-      "spawnCount": 1,
-      "splashRadius": 1.5,
-      "isLeader": false,
-      "placeholder": true
-    },
-    {
       "id": "warlord",
       "displayName": "Warlord",
       "slot": "leader",

@@ -1,7 +1,9 @@
 using System.Collections.Generic;
 using NovaFaction.Sim.Content;
+using NovaFaction.Sim.Economy;
 using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
+using NovaFaction.Sim.Spells;
 using NovaFaction.Sim.Units;
 
 namespace NovaFaction.Sim.Combat
@@ -17,18 +19,19 @@ namespace NovaFaction.Sim.Combat
     }
 
     /// <summary>
-    /// One tick of targeting, attacks, projectiles, damage and movement. See docs/design.md ("Combat and
-    /// match resolution"). Every decision reads the state as it was at the start of the tick (positions,
+    /// One tick of targeting, attacks, projectiles, spells, damage and movement. See docs/design.md ("Combat and
+    /// match resolution", "Spells" and "Map gold"). Every decision reads the state as it was at the start of the tick (positions,
     /// targets, who is stopped), and all damage lands together, so the order units are processed in never
     /// changes the result. Order of work:
     /// <list type="number">
     /// <item>attack cooldowns count down;</item>
-    /// <item>units choose a target and decide to attack, move or hold; structures choose a target;</item>
+    /// <item>units choose a target and decide to attack, move, hold or capture a mine; structures choose a target;</item>
     /// <item>projectiles already in flight move, and those that arrive hit (or fizzle);</item>
+    /// <item>active spell zones pulse, then pending spells that are due land;</item>
     /// <item>units then structures that are ready attack: melee hits land now, ranged attacks fire projectiles
     /// (which first move next tick);</item>
     /// <item>all hits are applied: HP, score, destroyed structures;</item>
-    /// <item>moving units that are still alive step;</item>
+    /// <item>moving units that are still alive step (stopping if they reach their target or a mine to capture);</item>
     /// <item>dead units are removed, targets that point at them are cleared, and if a structure fell every
     /// unit re-selects its objective.</item>
     /// </list>
@@ -41,6 +44,8 @@ namespace NovaFaction.Sim.Combat
             public TargetRef Target;
             public FixVector2 Impact;
             public Fix Damage;
+            /// <summary>Damage to structures (Damage for attacks; reduced for spells).</summary>
+            public Fix StructureDamage;
             public Fix SplashRadius;
             public TargetLayer CanHit;
         }
@@ -53,6 +58,7 @@ namespace NovaFaction.Sim.Combat
             ctx.DecideUnits();
             ctx.DecideStructures();
             ctx.AdvanceProjectiles();
+            ctx.ResolveSpells();
             ctx.Attack();
             ctx.ApplyHits(outcome);
             ctx.MoveUnits();
@@ -83,6 +89,8 @@ namespace NovaFaction.Sim.Combat
             private readonly FixVector2[] _velocity;
             private readonly FlowField?[] _flow;
             private readonly bool[] _moving;
+            // The unit found no enemy to fight this tick, so passing a mine may stop it (it can capture).
+            private readonly bool[] _mayCapture;
             private readonly bool[] _attackNow;
             private readonly bool[] _structureFires;
 
@@ -107,7 +115,8 @@ namespace NovaFaction.Sim.Combat
                     Unit u = _units[i];
                     _start[i] = u.Position;
                     _startTarget[i] = u.Target;
-                    _stopped[i] = u.State == UnitState.Attacking || u.State == UnitState.Holding;
+                    _stopped[i] = u.State == UnitState.Attacking || u.State == UnitState.Holding
+                        || u.State == UnitState.Capturing;
                 }
                 for (int i = 0; i < _n; i++)
                 {
@@ -124,6 +133,7 @@ namespace NovaFaction.Sim.Combat
                 _velocity = new FixVector2[_n];
                 _flow = new FlowField?[_n];
                 _moving = new bool[_n];
+                _mayCapture = new bool[_n];
                 _attackNow = new bool[_n];
                 _structureFires = new bool[state.Structures.Count];
             }
@@ -174,6 +184,17 @@ namespace NovaFaction.Sim.Combat
                     Claim(u.Owner, _startTarget[i], -1);
                     u.Objective = UnitMovement.SelectObjective(_map, u, pos);
                     target = Scan(i);
+                    if (target.IsNone && def.CanCapture)
+                    {
+                        // No enemy to fight: a capturer next to a mine its player does not own stops (or stays) there.
+                        if (IsAtUncapturedMine(u.Owner, pos))
+                        {
+                            u.Target = TargetRef.None;
+                            u.State = UnitState.Capturing;
+                            return;
+                        }
+                        _mayCapture[i] = true;
+                    }
                     if (target.IsNone && u.Objective != Unit.NoObjective && TargetRules.CanHitStructures(def.Targets))
                     {
                         target = TargetRef.Structure(u.Objective);
@@ -205,6 +226,19 @@ namespace NovaFaction.Sim.Combat
                 _velocity[i] = heading * def.MoveSpeed
                     + UnitMovement.SeparationPush(_units, _start, _stopped, i, _rules, heading);
                 _moving[i] = true;
+            }
+
+            /// <summary>Within mineCaptureRadius of a mine the player does not own (neutral or the enemy's).</summary>
+            private bool IsAtUncapturedMine(int player, FixVector2 position)
+            {
+                foreach (MineState mine in _state.Mines)
+                {
+                    if (mine.Owner != player && FixVector2.Distance(position, mine.Position) <= _rules.MineCaptureRadius)
+                    {
+                        return true;
+                    }
+                }
+                return false;
             }
 
             private void Claim(int owner, TargetRef target, int change)
@@ -464,6 +498,7 @@ namespace NovaFaction.Sim.Combat
                             Target = shot.Target,
                             Impact = shot.AimPoint,
                             Damage = shot.Damage,
+                            StructureDamage = shot.Damage,
                             SplashRadius = shot.SplashRadius,
                             CanHit = shot.CanHit,
                         });
@@ -471,6 +506,64 @@ namespace NovaFaction.Sim.Combat
                     // Arrived: removed either way (a dead target means the shot fizzles).
                 }
                 projectiles.RemoveRange(kept, projectiles.Count - kept);
+            }
+
+            /// <summary>
+            /// Active zones due a pulse hit first (id order), then pending spells whose land tick has come (id order).
+            /// An instant spell is then gone; a landed zone joins the zone list (its landing hit is its first pulse).
+            /// A zone is removed after its last active tick. Spell hits damage every enemy the spell may hit around
+            /// its target, structures at the reduced structure damage.
+            /// </summary>
+            public void ResolveSpells()
+            {
+                int tick = _state.Tick;
+                List<SpellInstance> zones = _state.SpellZoneList;
+                foreach (SpellInstance zone in zones)
+                {
+                    if (zone.PulsesOn(tick))
+                    {
+                        AddSpellHit(zone);
+                    }
+                }
+
+                List<SpellInstance> pending = _state.PendingSpellList;
+                int kept = 0;
+                for (int p = 0; p < pending.Count; p++)
+                {
+                    SpellInstance spell = pending[p];
+                    if (spell.LandTick > tick)
+                    {
+                        pending[kept++] = spell;
+                        continue;
+                    }
+                    AddSpellHit(spell);
+                    if (spell.IsZone)
+                    {
+                        int at = zones.Count;
+                        while (at > 0 && zones[at - 1].Id > spell.Id)
+                        {
+                            at--;
+                        }
+                        zones.Insert(at, spell); // keeps id order
+                    }
+                }
+                pending.RemoveRange(kept, pending.Count - kept);
+                zones.RemoveAll(z => z.EndTick <= tick + 1); // this was its last active tick
+            }
+
+            private void AddSpellHit(SpellInstance spell)
+            {
+                SpellDefinition def = spell.Definition;
+                _hits.Add(new Hit
+                {
+                    Owner = spell.Owner,
+                    Target = TargetRef.None,
+                    Impact = spell.Target,
+                    Damage = def.Damage,
+                    StructureDamage = def.StructureDamage,
+                    SplashRadius = def.Radius,
+                    CanHit = def.Targets,
+                });
             }
 
             public void Attack()
@@ -498,6 +591,7 @@ namespace NovaFaction.Sim.Combat
                             Target = u.Target,
                             Impact = aim,
                             Damage = def.Damage,
+                            StructureDamage = def.Damage,
                             SplashRadius = def.SplashRadius,
                             CanHit = def.Targets,
                         });
@@ -536,8 +630,8 @@ namespace NovaFaction.Sim.Combat
             // ------------------------------------------------------------ damage
 
             /// <summary>
-            /// Applies every hit in the order it was produced (projectile arrivals, then unit attacks, then
-            /// structure shots). Splash damages every enemy the attacker could hit whose center (or footprint) is
+            /// Applies every hit in the order it was produced (projectile arrivals, spells, unit attacks, structure
+            /// shots). Splash damages every enemy the attacker could hit whose center (or footprint) is
             /// within the radius of the impact point, measured at start-of-tick positions.
             /// </summary>
             public void ApplyHits(BattleOutcome outcome)
@@ -556,7 +650,7 @@ namespace NovaFaction.Sim.Combat
                         }
                         else
                         {
-                            DamageStructure(hit.Target.Id, hit.Owner, hit.Damage, outcome);
+                            DamageStructure(hit.Target.Id, hit.Owner, hit.StructureDamage, outcome);
                         }
                         continue;
                     }
@@ -577,7 +671,7 @@ namespace NovaFaction.Sim.Combat
                         {
                             if (s.Owner != hit.Owner && UnitMovement.DistanceToFootprint(_grid, hit.Impact, s.Index) <= radius)
                             {
-                                DamageStructure(s.Index, hit.Owner, hit.Damage, outcome);
+                                DamageStructure(s.Index, hit.Owner, hit.StructureDamage, outcome);
                             }
                         }
                     }
@@ -652,6 +746,12 @@ namespace NovaFaction.Sim.Combat
                         && IsInRange(i, u.Position, TargetRef.Structure(u.Objective)))
                     {
                         u.State = UnitState.Holding;
+                    }
+                    else if (_mayCapture[i] && IsAtUncapturedMine(u.Owner, u.Position))
+                    {
+                        // Passed within reach of a mine: stop now, capture from next tick.
+                        u.Target = TargetRef.None;
+                        u.State = UnitState.Capturing;
                     }
                 }
             }

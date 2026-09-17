@@ -70,7 +70,7 @@ public class MatchRulesTests
         }, rules.TuningPlaceholders);
 
         // Map gold: tick conversions and the cross-field limits hold for the shipped values.
-        Assert.Equal(100, rules.MineCaptureTicks);
+        Assert.Equal(80, rules.MineCaptureTicks);
         Assert.Equal(600, rules.ChestFirstSpawnTick);
         Assert.Equal(600, rules.ChestSpawnIntervalTicks);
         Assert.True(rules.MineIncomeCap >= rules.MineIncomePerSecond);

@@ -12,8 +12,8 @@ namespace NovaFaction.Sim.Cards
     /// </summary>
     public sealed class CardCycle : IStateHashable
     {
-        private readonly UnitDefinition?[] _hand;
-        private readonly List<UnitDefinition> _queue;
+        private readonly CardDefinition?[] _hand;
+        private readonly List<CardDefinition> _queue;
 
         internal CardCycle(Deck deck, int handSize, SimRandom random)
         {
@@ -21,9 +21,9 @@ namespace NovaFaction.Sim.Cards
             {
                 throw new ArgumentOutOfRangeException(nameof(handSize), "handSize must be 1..deck size - 1.");
             }
-            var order = new List<UnitDefinition>(deck.Cards);
+            var order = new List<CardDefinition>(deck.Cards);
             random.Shuffle(order);
-            _hand = new UnitDefinition?[handSize];
+            _hand = new CardDefinition?[handSize];
             for (int i = 0; i < handSize; i++)
             {
                 _hand[i] = order[i];
@@ -32,17 +32,17 @@ namespace NovaFaction.Sim.Cards
         }
 
         /// <summary>The hand, by slot. A slot is null only if it is empty (never under the current rules).</summary>
-        public IReadOnlyList<UnitDefinition?> Hand => _hand;
+        public IReadOnlyList<CardDefinition?> Hand => _hand;
 
         public int HandSize => _hand.Length;
 
         /// <summary>The card that fills the next played slot.</summary>
-        public UnitDefinition NextCard => _queue[0];
+        public CardDefinition NextCard => _queue[0];
 
         /// <summary>Cards waiting to be drawn, next card first.</summary>
-        public IReadOnlyList<UnitDefinition> Queue => _queue;
+        public IReadOnlyList<CardDefinition> Queue => _queue;
 
-        public UnitDefinition? GetSlot(int slot)
+        public CardDefinition? GetSlot(int slot)
         {
             if (slot < 0 || slot >= _hand.Length)
             {
@@ -52,9 +52,9 @@ namespace NovaFaction.Sim.Cards
         }
 
         /// <summary>Plays a filled slot: the next card takes its place and the played card goes to the back.</summary>
-        internal UnitDefinition Play(int slot)
+        internal CardDefinition Play(int slot)
         {
-            UnitDefinition played = GetSlot(slot) ?? throw new InvalidOperationException("Hand slot " + slot + " is empty.");
+            CardDefinition played = GetSlot(slot) ?? throw new InvalidOperationException("Hand slot " + slot + " is empty.");
             _hand[slot] = _queue[0];
             _queue.RemoveAt(0);
             _queue.Add(played);
@@ -67,7 +67,7 @@ namespace NovaFaction.Sim.Cards
         /// </summary>
         internal void ClearSlot(int slot)
         {
-            UnitDefinition? card = GetSlot(slot);
+            CardDefinition? card = GetSlot(slot);
             if (card != null)
             {
                 _hand[slot] = null;
@@ -78,7 +78,7 @@ namespace NovaFaction.Sim.Cards
         public void AppendHash(ref StateHasher hasher)
         {
             hasher.Add(_hand.Length);
-            foreach (UnitDefinition? card in _hand)
+            foreach (CardDefinition? card in _hand)
             {
                 hasher.Add(card != null);
                 if (card != null)
@@ -87,7 +87,7 @@ namespace NovaFaction.Sim.Cards
                 }
             }
             hasher.Add(_queue.Count);
-            foreach (UnitDefinition card in _queue)
+            foreach (CardDefinition card in _queue)
             {
                 hasher.Add(card.Id);
             }

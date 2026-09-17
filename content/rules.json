@@ -16,7 +16,7 @@
   "aggroRadius": 5.5,
   "meleeTargetCrowdPenalty": 1,
   "mineCaptureRadius": 1.5,
-  "mineCaptureSeconds": 5,
+  "mineCaptureSeconds": 4,
   "mineIncomePerSecond": 0.05,
   "mineIncomeCap": 0.1,
   "chestFirstSpawnSeconds": 30,

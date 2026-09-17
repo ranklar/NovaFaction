@@ -95,12 +95,31 @@ public class DeterminismTests
         int ticks = 0;
         int mostUnits = 0;
         bool towerDamaged = false;
+        // For the stuck check: where each unit was 5 s before the end, and whether it has been moving ever since.
+        const int StuckWindow = 5 * 20;
+        var windowStart = new Dictionary<int, FixVector2>();
+        var stoppedInWindow = new HashSet<int>();
         while (!a.IsEnded)
         {
             IReadOnlyList<Command> commands = CommandsAt(log, a.State.Tick);
             a.Tick(commands);
             b.Tick(commands);
             Assert.True(a.ComputeHash() == b.ComputeHash(), "hashes diverged at tick " + a.State.Tick);
+            int ticksLeft = (180 * 20) - a.State.Tick;
+            if (ticksLeft == StuckWindow)
+            {
+                foreach (Unit u in a.State.Units)
+                {
+                    windowStart[u.Id] = u.Position;
+                }
+            }
+            if (ticksLeft < StuckWindow)
+            {
+                foreach (Unit u in a.State.Units.Where(u => u.State != UnitState.Moving))
+                {
+                    stoppedInWindow.Add(u.Id);
+                }
+            }
             foreach (Unit u in a.State.Units)
             {
                 Assert.True(u.IsFlying || a.State.Map.Grid.IsWalkableAt(u.Position), "unit " + u.Id + " on a blocked cell");
@@ -122,8 +141,12 @@ public class DeterminismTests
         Assert.True(towerDamaged);
         Assert.True(a.State.Units.Count >= 5, "enough units should survive for the check to mean something");
 
-        // No stuck units: everything alive is attacking or has nothing to do.
-        var stuck = a.State.Units.Where(u => u.State != UnitState.Attacking && u.State != UnitState.Holding).ToList();
+        // No stuck units: a unit is stuck if it spent the last 5 s trying to walk and got less than a cell. (A unit
+        // that just won a fight may still be walking when the clock runs out; that is fine.) A unit waiting at a mine
+        // is not moving at all; a mine contested by an enemy it cannot reach or hit stays contested for good.
+        var stuck = a.State.Units.Where(u => u.State == UnitState.Moving && !stoppedInWindow.Contains(u.Id)
+            && windowStart.TryGetValue(u.Id, out FixVector2 then) && FixVector2.Distance(then, u.Position) < Fix.One).ToList();
+        Assert.True(a.State.Units.Count(u => u.State != UnitState.Moving) >= 5, "most survivors should have stopped");
         Assert.True(stuck.Count == 0, "stuck units: " + string.Join("; ", stuck.Select(u =>
             u.DefinitionId + "#" + u.Id + " p" + u.Owner + " " + u.State + " at " + u.Position + " target " + u.Target)));
         Assert.Contains(a.State.Units, u => u.State == UnitState.Attacking);
@@ -143,8 +166,8 @@ public class DeterminismTests
         CommandLog log = ScriptedLog(rules, inputSeed);
         var a = TestSim.New(rules, Map, matchSeed);
         var b = new Simulation(new MatchSetup(TestSim.Rules(income: "1", start: "10"), MapTestData.LoadTwoLane(),
-            StructureCatalog.FromJson(TestSim.StructuresJson()), TestSim.DefaultDeck(rules, TestSim.LoadFantasy()),
-            TestSim.DefaultDeck(rules, TestSim.LoadFantasy())), matchSeed);
+            StructureCatalog.FromJson(TestSim.StructuresJson()), TestSim.DefaultDeck(rules, TestSim.LoadFantasyCards()),
+            TestSim.DefaultDeck(rules, TestSim.LoadFantasyCards())), matchSeed);
         Assert.Equal(a.ComputeHash(), b.ComputeHash());
 
         bool structureHit = false;
@@ -187,7 +210,8 @@ public class DeterminismTests
     public void ScriptedDeploySequence_HashesIdenticallyEveryTick()
     {
         // Both players deploy by hand slot on fixed ticks: ground, swarm, flyer, an invalid target,
-        // and two drops on the same spot. Everything runs through two independently built sims.
+        // two drops on the same spot (the second one unaffordable), and a Fireball on the caster's own base (no
+        // friendly damage). Everything runs through two independently built sims.
         var script = new Dictionary<int, Command[]>
         {
             [0] = new[] { Command.DeployCard(0, 0, 0, 0, TestSim.V("4.5", "10.5")), Command.DeployCard(0, 1, 0, 1, TestSim.V("13.5", "21.5")) },
@@ -204,6 +228,7 @@ public class DeterminismTests
         Assert.Equal(a.ComputeHash(), b.ComputeHash());
 
         var seenHashes = new HashSet<ulong>();
+        bool sawPlayer1 = false;
         for (int tick = 0; tick < 60 * 20; tick++)
         {
             Command[] commands = script.TryGetValue(tick, out Command[]? c) ? c : Array.Empty<Command>();
@@ -212,11 +237,13 @@ public class DeterminismTests
             ulong hash = a.ComputeHash();
             Assert.True(hash == b.ComputeHash(), "hashes diverged at tick " + tick);
             seenHashes.Add(hash);
+            sawPlayer1 |= a.State.Units.Any(u => u.Owner == 1);
         }
         Assert.Equal(60 * 20, seenHashes.Count); // the state changes every tick
-        Assert.True(a.State.NextUnitId - 1 >= 6, "the script should field several units, got " + (a.State.NextUnitId - 1));
+        Assert.True(a.State.NextUnitId - 1 >= 5, "the script should field several units, got " + (a.State.NextUnitId - 1));
+        Assert.Equal(2, a.State.NextSpellId); // player 1's tick-400 drop was the Fireball in slot 2
         Assert.Contains(a.State.Units, u => u.State == UnitState.Attacking);
-        Assert.Contains(a.State.Units, u => u.Owner == 1);
+        Assert.True(sawPlayer1, "player 1 should have fielded units");
         Assert.Equal(1, a.State.GetPlayer(1).IgnoredDeploys); // the river drop
         for (int i = 0; i < a.State.Units.Count; i++)
         {
@@ -391,8 +418,8 @@ public class DeterminismTests
         UnitRoster original = TestSim.LoadFantasy();
         UnitRoster tweaked = UnitRoster.FromJson(TestSim.FantasyUnitsJson().Replace("\"hp\": 1800", "\"hp\": 1801"));
         Assert.NotEqual(original.ContentHash, tweaked.ContentHash);
-        var a = new Simulation(new MatchSetup(rules, Map, TestSim.LoadStructures(), TestSim.DefaultDeck(rules, original), TestSim.DefaultDeck(rules, original)), 1);
-        var b = new Simulation(new MatchSetup(rules, Map, TestSim.LoadStructures(), TestSim.DefaultDeck(rules, original), TestSim.DefaultDeck(rules, tweaked)), 1);
+        var a = new Simulation(new MatchSetup(rules, Map, TestSim.LoadStructures(), TestSim.DefaultDeck(rules, TestSim.Cards(original)), TestSim.DefaultDeck(rules, TestSim.Cards(original))), 1);
+        var b = new Simulation(new MatchSetup(rules, Map, TestSim.LoadStructures(), TestSim.DefaultDeck(rules, TestSim.Cards(original)), TestSim.DefaultDeck(rules, TestSim.Cards(tweaked))), 1);
         Assert.NotEqual(a.ComputeHash(), b.ComputeHash());
     }
 
@@ -432,7 +459,7 @@ public class DeterminismTests
         MatchState s = sim.State;
         _output.WriteLine("units " + s.Units.Count + " created " + (s.NextUnitId - 1) + " shots " + s.NextProjectileId
             + " scores " + s.Players[0].Score + "/" + s.Players[1].Score + " map gold " + s.Players[0].GoldFromMap + "/"
-            + s.Players[1].GoldFromMap + " mines " + string.Join(",", s.Mines.Select(m => m.Owner)) + " end " + s.Tick + " " + s.EndReason + " "
+            + s.Players[1].GoldFromMap + " spells " + (s.NextSpellId - 1) + " mines " + string.Join(",", s.Mines.Select(m => m.Owner)) + " end " + s.Tick + " " + s.EndReason + " "
             + s.TieBreakRule + " winner " + s.Winner + " hash 0x" + sim.ComputeHash().ToString("X16")
             + " initial 0x" + initialHash.ToString("X16"));
         Assert.Equal(PinnedInitialHash, initialHash);
@@ -441,13 +468,15 @@ public class DeterminismTests
         Assert.True(s.NextProjectileId > 10, "projectiles should have flown");
         Assert.True(s.Players.All(p => p.Score > Fix.Zero), "both players should have damaged structures");
         Assert.True(s.Players.All(p => p.GoldFromMap > Fix.Zero), "the pin should cover chest collection");
+        Assert.True(s.NextSpellId > 3, "the pin should cover spell casts");
         Assert.NotEqual(EndReason.None, s.EndReason);
         Assert.Equal(PinnedFinalHash, sim.ComputeHash());
     }
 
-    // Re-pinned Sept 2026 for hash format 5 (mines, chests, gold from map; mine cells block movement).
-    private const ulong PinnedInitialHash = 0xAB9BF1262D788595UL;
-    private const ulong PinnedFinalHash = 0x156A629AAC1E8C42UL;
+    // Re-pinned Sept 2026 for hash format 6 (spell cards: Fireball replaces the fire spirit in the deck, pending
+    // spells and zones are hashed; units stop to capture mines).
+    private const ulong PinnedInitialHash = 0x2518A5C578D154ABUL;
+    private const ulong PinnedFinalHash = 0x051307BD582EF1BDUL;
 }
 
 public class StateHasherTests

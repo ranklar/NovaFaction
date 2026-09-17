@@ -47,21 +47,40 @@ internal static class TestSim
     /// <summary>The shipped content/factions/fantasy/units.json.</summary>
     internal static UnitRoster LoadFantasy() => UnitRoster.FromJson(FantasyUnitsJson(), "units.json");
 
-    /// <summary>All eight shipped fantasy units (one of them the leader), in file order.</summary>
+    internal static string FantasySpellsJson() =>
+        File.ReadAllText(MatchRulesTests.ContentPath(Path.Combine("factions", "fantasy", "spells.json")));
+
+    /// <summary>The shipped content/factions/fantasy/spells.json.</summary>
+    internal static SpellBook LoadFantasySpells() => SpellBook.FromJson(FantasySpellsJson());
+
+    /// <summary>The shipped fantasy units and spells.</summary>
+    internal static CardCatalog LoadFantasyCards() => CardCatalog.FromJson(FantasyUnitsJson(), FantasySpellsJson());
+
+    /// <summary>The shipped fantasy spells with the given units.</summary>
+    internal static CardCatalog Cards(UnitRoster units) => new CardCatalog(units, LoadFantasySpells());
+
+    /// <summary>All seven shipped fantasy units (one of them the leader) in file order, plus the Fireball spell.</summary>
     internal static readonly string[] DefaultDeckIds =
-        { "stone_golem", "knight", "goblin_pack", "elf_archer", "griffin", "catapult", "fire_spirit", "warlord" };
+        { "stone_golem", "knight", "goblin_pack", "elf_archer", "griffin", "catapult", "warlord", "fireball" };
 
-    internal static Deck DefaultDeck(MatchRules rules, UnitRoster? roster = null) =>
-        Deck.Create(roster ?? LoadFantasy(), DefaultDeckIds, rules.DeckSize);
+    /// <summary>The default deck with Blizzard in place of Fireball.</summary>
+    internal static readonly string[] BlizzardDeckIds =
+        DefaultDeckIds.Select(id => id == "fireball" ? "blizzard" : id).ToArray();
 
-    internal static MatchSetup Setup(MatchRules rules, MapDefinition map, StructureCatalog? structures = null)
+    internal static Deck DefaultDeck(MatchRules rules, CardCatalog? cards = null) =>
+        Deck.Create(cards ?? LoadFantasyCards(), DefaultDeckIds, rules.DeckSize);
+
+    internal static MatchSetup Setup(MatchRules rules, MapDefinition map, StructureCatalog? structures = null,
+        string[]? deckIds = null)
     {
-        UnitRoster roster = LoadFantasy();
-        return new MatchSetup(rules, map, structures ?? LoadStructures(), DefaultDeck(rules, roster), DefaultDeck(rules, roster));
+        CardCatalog cards = LoadFantasyCards();
+        Deck deck = Deck.Create(cards, deckIds ?? DefaultDeckIds, rules.DeckSize);
+        return new MatchSetup(rules, map, structures ?? LoadStructures(), deck, deck);
     }
 
-    internal static Simulation New(MatchRules rules, MapDefinition map, ulong seed, StructureCatalog? structures = null) =>
-        new Simulation(Setup(rules, map, structures), seed);
+    internal static Simulation New(MatchRules rules, MapDefinition map, ulong seed, StructureCatalog? structures = null,
+        string[]? deckIds = null) =>
+        new Simulation(Setup(rules, map, structures, deckIds), seed);
 
     internal static Simulation Replay(MatchRules rules, MapDefinition map, ulong seed, CommandLog log) =>
         Simulation.Replay(Setup(rules, map), seed, log);

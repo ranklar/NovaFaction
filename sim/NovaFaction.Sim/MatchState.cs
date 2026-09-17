@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
 
 namespace NovaFaction.Sim
@@ -59,12 +60,14 @@ namespace NovaFaction.Sim
     public sealed class MatchState : IStateHashable
     {
         /// <summary>Bump when the hashed layout changes, so old and new hashes never collide by accident.</summary>
-        public const int HashFormatVersion = 1;
+        // Version 2 added the map (id, content hash, destroyed structures, unlocked zones).
+        public const int HashFormatVersion = 2;
 
         private readonly PlayerState[] _players;
 
-        internal MatchState(ulong seed, int clockTicks, Fix startingGold)
+        internal MatchState(ulong seed, int clockTicks, Fix startingGold, MapDefinition map)
         {
+            Map = new MapState(map);
             Random = new SimRandom(seed);
             ClockRemainingTicks = clockTicks;
             Phase = MatchPhase.Regulation;
@@ -75,6 +78,9 @@ namespace NovaFaction.Sim
         public int Tick { get; internal set; }
 
         public SimRandom Random { get; }
+
+        /// <summary>The battlefield: terrain, structures, deploy zones, flow fields.</summary>
+        public MapState Map { get; }
 
         /// <summary>Ticks left on the current phase's clock.</summary>
         public int ClockRemainingTicks { get; internal set; }
@@ -105,7 +111,8 @@ namespace NovaFaction.Sim
             {
                 hasher.AddHashable(player);
             }
-            // Future state (units, structures, projectiles, mines, chests, decks) is appended here:
+            hasher.AddHashable(Map);
+            // Future state (units, structure HP, projectiles, mines, chests, decks) is appended here:
             // count first, then each item in id order.
         }
     }

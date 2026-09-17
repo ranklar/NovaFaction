@@ -1,0 +1,85 @@
+{
+  "formatVersion": 1,
+  "id": "twolane",
+  "cellSize": 1,
+  "grid": [
+    "###............###",
+    ".......KKKK.......",
+    ".......KKKK.......",
+    ".......KKKK.......",
+    "..................",
+    ".........1........",
+    "...TT........TT...",
+    "...TT........TT...",
+    "..................",
+    "..................",
+    "..................",
+    "...C..........C...",
+    "..................",
+    "..................",
+    "##....######....##",
+    "##....######M...##",
+    "##...M######....##",
+    "##....######....##",
+    "..................",
+    "..................",
+    "...C..........C...",
+    "..................",
+    "..................",
+    "..................",
+    "...TT........TT...",
+    "...TT........TT...",
+    "........0.........",
+    "..................",
+    ".......KKKK.......",
+    ".......KKKK.......",
+    ".......KKKK.......",
+    "###............###"
+  ],
+  "structures": [
+    {
+      "id": "keep_0",
+      "kind": "keep",
+      "owner": 0,
+      "footprint": { "x": 7, "y": 1, "width": 4, "height": 3 }
+    },
+    {
+      "id": "tower_0_west",
+      "kind": "tower",
+      "owner": 0,
+      "footprint": { "x": 3, "y": 6, "width": 2, "height": 2 },
+      "unlocksDeployZone": { "x": 0, "y": 8, "width": 9, "height": 6 }
+    },
+    {
+      "id": "tower_0_east",
+      "kind": "tower",
+      "owner": 0,
+      "footprint": { "x": 13, "y": 6, "width": 2, "height": 2 },
+      "unlocksDeployZone": { "x": 9, "y": 8, "width": 9, "height": 6 }
+    },
+    {
+      "id": "keep_1",
+      "kind": "keep",
+      "owner": 1,
+      "footprint": { "x": 7, "y": 28, "width": 4, "height": 3 }
+    },
+    {
+      "id": "tower_1_west",
+      "kind": "tower",
+      "owner": 1,
+      "footprint": { "x": 3, "y": 24, "width": 2, "height": 2 },
+      "unlocksDeployZone": { "x": 0, "y": 18, "width": 9, "height": 6 }
+    },
+    {
+      "id": "tower_1_east",
+      "kind": "tower",
+      "owner": 1,
+      "footprint": { "x": 13, "y": 24, "width": 2, "height": 2 },
+      "unlocksDeployZone": { "x": 9, "y": 18, "width": 9, "height": 6 }
+    }
+  ],
+  "deployZones": [
+    { "player": 0, "x": 0, "y": 0, "width": 18, "height": 13 },
+    { "player": 1, "x": 0, "y": 19, "width": 18, "height": 13 }
+  ]
+}

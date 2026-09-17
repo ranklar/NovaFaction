@@ -8,7 +8,14 @@ Themed factions released over time as content packs; fantasy faction first.
 ## Match rules
 - 1v1, human or bot. 3:00 clock.
 - Win: enemy Keep destroyed = instant win. Otherwise higher damage score at the clock.
-  Exact tie -> 60s sudden death, first damage wins. No draws.
+  Exact tie -> sudden death. No draws.
+- Sudden death (decided Sept 2026, not implemented yet): lasts 60s; gold income is doubled
+  (the multiplier will be a rules.json value); the first player to deal any damage wins.
+  If it expires with no damage dealt, tie-breaks apply in this order:
+  1. more enemy structures destroyed;
+  2. higher HP on your own weakest structure (a destroyed structure counts as 0 HP);
+  3. more gold collected from mines and chests (base income does not count);
+  4. a coin flip from the match seed.
 - Score = HP removed from enemy structures + a destruction bonus per structure killed.
 - Structures per side: Keep (base) + 2 forward towers. Forward towers attack.
   Destroying a forward tower extends the attacker's deploy zone onto that side.
@@ -118,6 +125,52 @@ Themed factions released over time as content packs; fantasy faction first.
     count. New state implements IStateHashable and appends count-then-items in id order.
     A test pins the hash of a scripted full match; change it only on purpose.
   - Replay = rules + seed + CommandLog (Simulation.Replay). The log is in memory only for now.
+  - Replay file format (decided Sept 2026, not implemented yet): compact, versioned binary.
+    Header: replay format version, sim version, content version, seed. Body: the command log.
+    A JSON export of the same data exists for debugging only; the binary file is authoritative
+    (it is what the server verifies).
+- Sim map layer (sim/NovaFaction.Sim/Map):
+  - Map files: content/maps/<id>.json with formatVersion (1), id (a-z 0-9 _ -), cellSize (world units
+    per cell, 1/16..64), grid, structures, deployZones. Unknown keys are errors.
+  - grid: equal-length strings, first string = top row. Legend: '.' ground, '#' blocked, 'K' Keep,
+    'T' forward tower, 'M' gold mine, 'C' chest spawn, '0'/'1' player spawn-side marker.
+    M, C, 0, 1 are markers on open ground (walkable). Max 256x256.
+  - Coordinates: cell (0,0) is bottom-left; y grows toward player 1. World origin is the
+    bottom-left corner of cell (0,0); cell (x,y) covers [x, x+1) * cellSize on each axis.
+    Player 0 owns the bottom, player 1 the top, but owners are written explicitly in the file.
+  - structures: list of { id, kind "keep"|"tower", owner 0|1, footprint {x,y,width,height} },
+    towers also have unlocksDeployZone (a rectangle on the owner's side that the other player may
+    deploy into once the tower is destroyed). A structure's number in the sim is its list position.
+    The K/T letters must match the declared footprints exactly (both ways); this double entry catches
+    typos. deployZones: list of { player, x, y, width, height }; at least one per player.
+  - Validation: rectangular grid; known characters; exactly 1 Keep + 2 towers per player;
+    footprints in bounds, non-overlapping, and drawn with the right letter; spawn/mine/chest
+    markers never under a footprint; all rectangles in bounds; at least one '0' and one '1' marker,
+    each inside its own player's base deploy zone; every structure, mine and chest spawn reachable
+    from every spawn marker. Errors name the file, line and cell.
+  - Map content hash: FNV-1a over the parsed data (not the file bytes), so line endings and
+    whitespace, which git may change per platform, do not matter. Folded into the state hash along
+    with the map id, which structures are destroyed, and each player's unlocked zones.
+    Hash format version is now 2.
+  - Grid: walkable = in bounds, not '#', and not under a standing structure. Destroying a structure
+    makes its footprint walkable and bumps a walkability version. WorldToCell is exact floor division.
+  - FlowField (one per target structure, cached, rebuilt when the walkability version changes):
+    Dijkstra from the target's cells over walkable cells, 8 neighbors, straight cost 1, diagonal
+    cost sqrt(2) = 92682/65536. No corner cutting: a diagonal needs both side cells open. The target's
+    own cells count as open. Distance = path cost from cell center to nearest target cell center,
+    times cellSize; Fix.MaxValue when unreachable. Direction = one of 8 unit vectors along a shortest
+    path, zero inside the target or when unreachable. Ties: best aligned with the line to the
+    target center, then the one to the left of that line, then a fixed order. The first two rules
+    are unchanged by a 180-degree rotation, so on a symmetric map both players route identically
+    (a test checks this on twolane).
+  - Deploy: allowed on a walkable cell inside one of the player's base zones or unlocked zones.
+    Unlocked zones are listed in tower order, not destruction order. Destroying a Keep unlocks nothing.
+  - Simulation now takes the map: new Simulation(rules, map, seed); Replay(rules, map, seed, log).
+  - content/maps/twolane.json: 18x32, 180-degree symmetric (also left-right symmetric apart from
+    the mines). Keeps 4x3, towers 2x2, a 4-row blocked river with two 4-wide lane gaps,
+    one mine at the inner edge of each gap (one on each side of the center line), two chest spawns
+    per lane, base deploy zones = each player's 13 rows nearest their Keep, tower unlocks = a 9x6
+    block in front of the fallen tower's half of the field.
 - server/: ASP.NET Core (C#). Accounts, economy, matchmaking, input relay, match verification by
   re-running the sim. PostgreSQL. Runs on the Windows desktop for LAN testing; cloud container later.
 - content/: JSON data for units, factions, maps, missions. Art in Addressables bundles per theme.
@@ -137,5 +190,8 @@ Themed factions released over time as content packs; fantasy faction first.
 - Studio name and Android package identifier.
 - Fantasy roster: the 16 units and 2 leaders.
 - Income, cost and match-length numbers (tune in the headless harness).
-- Sudden death that ends with no damage dealt: the rules say "no draws" but name no tie-break.
-- CommandLog file format for saved replays and server verification.
+- Replay header: besides format/sim/content version and seed, a replay must also name the map
+  (id + content hash) and both players' decks and unit levels. Decide when replays are built.
+- Structure HP and damage score live with combat (next); the map layer only tracks destroyed/standing.
+- Unit movement: flow-field directions are 8-way per cell; smoothing and unit separation are
+  movement-layer decisions.

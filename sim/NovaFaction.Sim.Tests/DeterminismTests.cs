@@ -1,5 +1,6 @@
 using NovaFaction.Sim.Commands;
 using NovaFaction.Sim.Content;
+using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
 
 namespace NovaFaction.Sim.Tests;
@@ -10,6 +11,7 @@ namespace NovaFaction.Sim.Tests;
 public class DeterminismTests
 {
     private static MatchRules Rules => MatchRulesTests.LoadShippedRules();
+    private static MapDefinition Map => MapTestData.LoadTwoLane();
 
     /// <summary>
     /// A full match of scripted random inputs for both players (deploys, abilities, no-ops),
@@ -51,8 +53,8 @@ public class DeterminismTests
         Assert.Equal(3600, log.TickCount);
         Assert.True(log.CommandCount > 500, "script should produce plenty of commands");
 
-        var a = new Simulation(rules, 0xC0FFEE);
-        var b = new Simulation(MatchRulesTests.LoadShippedRules(), 0xC0FFEE); // independently loaded rules
+        var a = new Simulation(rules, Map, 0xC0FFEE);
+        var b = new Simulation(MatchRulesTests.LoadShippedRules(), MapTestData.LoadTwoLane(), 0xC0FFEE); // independently loaded rules
         Assert.Equal(a.ComputeHash(), b.ComputeHash());
 
         int ticks = 0;
@@ -103,7 +105,7 @@ public class DeterminismTests
         Simulation live = SimulationTests.RunFullMatch(rules, 424242, script, liveHashes);
 
         // Replay from the simulation's own recorded log, not the script.
-        Simulation replay = Simulation.Replay(rules, 424242, live.Log);
+        Simulation replay = Simulation.Replay(rules, Map, 424242, live.Log);
 
         Assert.Equal(live.ComputeHash(), replay.ComputeHash());
         Assert.Equal(liveHashes[liveHashes.Count - 1], replay.ComputeHash());
@@ -127,7 +129,7 @@ public class DeterminismTests
         {
             partial.Record(tick, live.Log.GetCommands(tick));
         }
-        Assert.Equal(liveHashes[1000], Simulation.Replay(rules, 5, partial).ComputeHash());
+        Assert.Equal(liveHashes[1000], Simulation.Replay(rules, Map, 5, partial).ComputeHash());
     }
 
     [Fact]
@@ -141,8 +143,8 @@ public class DeterminismTests
             Command.LeaderAbility(0, 0, 1, target),
             Command.None(0, 1, 0),
         };
-        var a = new Simulation(rules, 3);
-        var b = new Simulation(rules, 3);
+        var a = new Simulation(rules, Map, 3);
+        var b = new Simulation(rules, Map, 3);
         a.Tick(ordered);
         b.Tick(new[] { ordered[2], ordered[1], ordered[0] });
         Assert.Equal(a.ComputeHash(), b.ComputeHash());
@@ -151,7 +153,7 @@ public class DeterminismTests
     [Fact]
     public void Hash_CoversEveryStateField()
     {
-        var sim = new Simulation(Rules, 1);
+        var sim = new Simulation(Rules, Map, 1);
         MatchState s = sim.State;
         var seen = new HashSet<ulong> { sim.ComputeHash() };
 
@@ -172,13 +174,17 @@ public class DeterminismTests
             player.Score = Fix.FromRaw(1); Changed("Score of player " + p);
             player.CommandsReceived = 1; Changed("CommandsReceived of player " + p);
         }
+        for (int i = 0; i < s.Map.Definition.Structures.Count; i++)
+        {
+            s.Map.DestroyStructure(i); Changed("destroyed structure " + i);
+        }
     }
 
     [Fact]
     public void Hash_DistinguishesWhichPlayerHasAValue()
     {
-        var a = new Simulation(Rules, 1);
-        var b = new Simulation(Rules, 1);
+        var a = new Simulation(Rules, Map, 1);
+        var b = new Simulation(Rules, Map, 1);
         a.State.GetPlayer(0).Score = Fix.One;
         b.State.GetPlayer(1).Score = Fix.One;
         Assert.NotEqual(a.ComputeHash(), b.ComputeHash());
@@ -195,13 +201,15 @@ public class DeterminismTests
   ""ticksPerSecond"": 20, ""matchLengthSeconds"": 180, ""suddenDeathSeconds"": 60,
   ""goldBaseIncomePerSecond"": 0.35, ""goldStartingAmount"": 5, ""goldCap"": 10,
   ""deploySpawnDelaySeconds"": 1, ""handSize"": 4, ""deckSize"": 8 }");
-        Assert.Equal(PinnedInitialHash, new Simulation(rules, 12345).ComputeHash());
-        Simulation sim = SimulationTests.RunFullMatch(rules, 12345, ScriptedLog(rules, 12345));
+        // Likewise a fixed inline map, so editing content/maps does not move the pin.
+        MapDefinition map = MapTestData.Small();
+        Assert.Equal(PinnedInitialHash, new Simulation(rules, map, 12345).ComputeHash());
+        Simulation sim = SimulationTests.RunFullMatch(rules, 12345, ScriptedLog(rules, 12345), map: map);
         Assert.Equal(PinnedFinalHash, sim.ComputeHash());
     }
 
-    private const ulong PinnedInitialHash = 0xF28F4E37686B46D7UL;
-    private const ulong PinnedFinalHash = 0x049E356C31535B4BUL;
+    private const ulong PinnedInitialHash = 0x31FB5C460926730AUL;
+    private const ulong PinnedFinalHash = 0xE3023109AA724F26UL;
 }
 
 public class StateHasherTests

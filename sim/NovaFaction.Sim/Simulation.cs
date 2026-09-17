@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using NovaFaction.Sim.Commands;
 using NovaFaction.Sim.Content;
+using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
 
 namespace NovaFaction.Sim
@@ -9,20 +10,25 @@ namespace NovaFaction.Sim
     /// <summary>
     /// A deterministic match. The only way time passes is <see cref="Tick"/>, called once per tick
     /// (20 per second) with that tick's commands. Same rules + seed + commands = same result on
-    /// every device.
+    /// every device (same map data too: the map's content hash is part of the state hash).
     /// </summary>
     public sealed class Simulation
     {
         private readonly CommandLog _log = new CommandLog();
 
-        public Simulation(MatchRules rules, ulong seed)
+        public Simulation(MatchRules rules, MapDefinition map, ulong seed)
         {
             Rules = rules ?? throw new ArgumentNullException(nameof(rules));
+            if (map == null)
+            {
+                throw new ArgumentNullException(nameof(map));
+            }
             Seed = seed;
-            State = new MatchState(seed, rules.MatchLengthTicks, rules.GoldStartingAmount);
+            State = new MatchState(seed, rules.MatchLengthTicks, rules.GoldStartingAmount, map);
         }
 
         public MatchRules Rules { get; }
+        public MapDefinition Map => State.Map.Definition;
         public ulong Seed { get; }
         public MatchState State { get; }
 
@@ -82,13 +88,13 @@ namespace NovaFaction.Sim
         }
 
         /// <summary>Runs a fresh match from a recorded log and returns it.</summary>
-        public static Simulation Replay(MatchRules rules, ulong seed, CommandLog log)
+        public static Simulation Replay(MatchRules rules, MapDefinition map, ulong seed, CommandLog log)
         {
             if (log == null)
             {
                 throw new ArgumentNullException(nameof(log));
             }
-            var sim = new Simulation(rules, seed);
+            var sim = new Simulation(rules, map, seed);
             for (int tick = 0; tick < log.TickCount; tick++)
             {
                 sim.Tick(log.GetCommands(tick));

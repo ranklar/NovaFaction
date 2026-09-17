@@ -65,6 +65,17 @@ namespace NovaFaction.Sim
             Add(value.Y);
         }
 
+        /// <summary>Length, then each UTF-16 code unit as two little-endian bytes.</summary>
+        public void Add(string value)
+        {
+            Add(value.Length);
+            foreach (char c in value)
+            {
+                Add((byte)c);
+                Add((byte)(c >> 8));
+            }
+        }
+
         public void AddHashable<T>(T value) where T : IStateHashable => value.AppendHash(ref this);
     }
 }

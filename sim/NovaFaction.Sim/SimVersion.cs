@@ -12,6 +12,7 @@ namespace NovaFaction.Sim
     public static class SimVersion
     {
         // 1: Sept 2026, first version with replay files.
-        public const int Current = 1;
+        // 2: Sept 2026, bot saves toward the card its plan wants and fetches chests on its own side.
+        public const int Current = 2;
     }
 }

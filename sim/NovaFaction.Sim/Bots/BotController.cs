@@ -12,8 +12,10 @@ namespace NovaFaction.Sim.Bots
 {
     /// <summary>
     /// A computer player. Once per reaction delay (starting on tick 0) it reads the match and scores candidate actions:
-    /// defend a threatened structure, attack the weakest lane, send a capturer toward a mine, cast a spell, and use the
-    /// leader ability. It plays at most one card and one ability per decision, taking the best-scoring action with
+    /// defend a threatened structure, attack the weakest lane, send a capturer toward a mine, fetch a chest on its own
+    /// side, cast a spell, and use the leader ability. When the card its attack plan wants most costs more than it can
+    /// pay for, it saves toward that card instead of spending the gold on cheaper ones (defence is never held back).
+    /// It plays at most one card and one ability per decision, taking the best-scoring action with
     /// probability decisionQuality and otherwise one of the top three at random. It uses only what a player can see
     /// (units, pending deploys, structures, its own hand and gold) and never issues a command it knows the sim would
     /// reject. Its randomness comes from its own <see cref="SimRandom"/>, seeded from the match seed and the player, so
@@ -44,6 +46,10 @@ namespace NovaFaction.Sim.Bots
         private static readonly Fix SafeMargin = Fix.One; // attack waves drop at least this far outside enemy reach
         private static readonly Fix MineUtility = Fix.FromInt(6); // times mineFocus
         private static readonly Fix MineGuardRadius = Fix.FromInt(6); // an own capturer this close already handles a mine
+        private static readonly Fix ChestUtilityPerGold = Fix.FromInt(3); // times the chest's gold and mineFocus
+        private static readonly Fix ChestGuardRadius = Fix.FromInt(4); // an own unit this close is already collecting it
+        private static readonly Fix ChestSendRadius = Fix.FromInt(6); // farther than this from the chest is not "going for it"
+        private static readonly Fix ChestDetourRadius = Fix.FromInt(6); // and it must be this near the lane the bot is pushing
         private static readonly Fix SpellOwnHalfUtility = Fix.FromInt(10);
         private static readonly Fix SpellUtility = Fix.FromInt(3);
         private static readonly Fix OwnHalfSpellValueWeight = Fix.FromInt(3); // a good spell beats a unit drop on the same threat
@@ -62,6 +68,7 @@ namespace NovaFaction.Sim.Bots
         private readonly int _delayTicks;
         private readonly List<Candidate> _candidates = new List<Candidate>();
         private readonly List<FixVector2> _deployable = new List<FixVector2>();
+        private readonly List<AttackOption> _attackOptions = new List<AttackOption>();
         private int _deployableVersion = -1;
         private int _deployableUnlocks = -1;
         private int _nextDecisionTick;
@@ -71,6 +78,9 @@ namespace NovaFaction.Sim.Bots
         private PlayerState _me = null!;
         private bool _suddenDeath;
         private Fix _reserve;
+        private Fix _savingsGoal; // gold held back for the card the attack plan wants but cannot pay for yet
+        private Fix _savingsFloor; // while saving, what a non-defensive action must beat to be worth breaking in for
+        private Fix _attackKeep; // gold an attack must leave in hand: the reserve plus the aggression wait
         private Fix _aggression;
         private FixVector2 _ownKeepCenter;
         private FixVector2 _enemyKeepCenter;
@@ -155,6 +165,10 @@ namespace NovaFaction.Sim.Bots
             _suddenDeath = state.Phase == MatchPhase.SuddenDeath;
             // Sudden death: all in. The reserve is spent and the bot attacks as if fully aggressive.
             _reserve = _suddenDeath ? Fix.Zero : Personality.GoldReserve;
+            _savingsGoal = Fix.Zero; // AddAttack sets these three; the other card actions then respect them
+            _savingsFloor = Fix.MinValue;
+            _attackKeep = _reserve;
+            _attackOptions.Clear();
             _aggression = _suddenDeath ? Fix.One : Personality.Aggression;
             MapDefinition map = state.Map.Definition;
             _ownKeepCenter = FootprintCenter(map.GetKeep(Player).Footprint);
@@ -164,8 +178,9 @@ namespace NovaFaction.Sim.Bots
             int sequence = 0;
             _candidates.Clear();
             AddDefense();
-            AddAttack();
+            AddAttack(); // sets _savingsGoal, so it must run before the actions that respect it
             AddMines();
+            AddChests();
             AddSpells();
             if (TryChoose(out Candidate card) && CanDeploy(card.Slot, card.Target))
             {
@@ -211,6 +226,20 @@ namespace NovaFaction.Sim.Bots
         private void Add(ActionKind kind, Fix utility, int slot, FixVector2 target, string label)
         {
             _candidates.Add(new Candidate { Kind = kind, Utility = utility, Slot = slot, Target = target, Label = label });
+        }
+
+        /// <summary>
+        /// Adds an action that is spending the bot's savings (a mine or chest drop, an attacking spell). While the
+        /// bot is saving it declines attacks it could pay for, so such an action only goes ahead when it is worth
+        /// more than the best attack just declined; otherwise saving would simply push the gold into whatever cheap
+        /// action was left, which is the opposite of saving. Defence is never gated this way.
+        /// </summary>
+        private void AddSpending(Fix utility, int slot, FixVector2 target, string label)
+        {
+            if (utility > _savingsFloor)
+            {
+                Add(ActionKind.Card, utility, slot, target, label);
+            }
         }
 
         // ------------------------------------------------------------ (a) + (b) threats and defense
@@ -406,6 +435,16 @@ namespace NovaFaction.Sim.Bots
 
         // ------------------------------------------------------------ (c) attack
 
+        /// <summary>One hand card's attack drop, scored before the bot knows whether it can pay for it.</summary>
+        private struct AttackOption
+        {
+            public int Slot;
+            public UnitDefinition Card;
+            public Fix Utility;
+            public FixVector2 Target;
+            public string Label;
+        }
+
         private void AddAttack()
         {
             MapDefinition map = _s.Map.Definition;
@@ -460,9 +499,14 @@ namespace NovaFaction.Sim.Bots
             Fix bonus = weakness * MatchupBonus;
             Fix wait = _suddenDeath ? Fix.Zero : AttackWaitGold * (Fix.One - _aggression);
             string lane = map.Structures[target].Id;
+
+            _attackKeep = _reserve + wait;
+
+            // Score every card in hand first, whether or not the bot can pay for it: the plan is what it wants, not
+            // what it happens to be able to afford this second.
             for (int slot = 0; slot < _me.Cards.HandSize; slot++)
             {
-                if (!(_me.Cards.Hand[slot] is UnitDefinition card) || !CanAfford(card, _reserve + wait) || IsBlockedLeader(card))
+                if (!(_me.Cards.Hand[slot] is UnitDefinition card) || IsBlockedLeader(card))
                 {
                     continue;
                 }
@@ -470,24 +514,81 @@ namespace NovaFaction.Sim.Bots
                 {
                     if (IsTank(card))
                     {
-                        Add(ActionKind.Card, SecondTankUtility * scale + bonus, slot, lanePoint, "tank again at " + lane);
+                        AddOption(slot, card, SecondTankUtility * scale + bonus, lanePoint, "tank again at " + lane);
                     }
                     else
                     {
-                        Add(ActionKind.Card, SupportUtility * scale + bonus, slot, supportPoint,
-                            "support " + card.Id + " at " + lane);
+                        AddOption(slot, card, SupportUtility * scale + bonus, supportPoint, "support " + card.Id + " at " + lane);
                     }
                 }
                 else if (IsTank(card))
                 {
-                    Add(ActionKind.Card, TankLeadUtility * scale + bonus, slot, lanePoint, "tank " + card.Id + " at " + lane);
+                    AddOption(slot, card, TankLeadUtility * scale + bonus, lanePoint, "tank " + card.Id + " at " + lane);
                 }
                 else
                 {
-                    Fix utility = (LoneLeadUtility + MatchupBonus * _aggression) * scale + bonus;
-                    Add(ActionKind.Card, utility, slot, lanePoint, "lead " + card.Id + " at " + lane);
+                    AddOption(slot, card, (LoneLeadUtility + MatchupBonus * _aggression) * scale + bonus, lanePoint,
+                        "lead " + card.Id + " at " + lane);
                 }
             }
+
+            _savingsGoal = SavingsGoal(wait);
+            foreach (AttackOption option in _attackOptions)
+            {
+                if (CanAfford(option.Card, _reserve + wait + _savingsGoal))
+                {
+                    Add(ActionKind.Card, option.Utility, option.Slot, option.Target, option.Label);
+                }
+                else if (_savingsGoal > Fix.Zero && CanAfford(option.Card, _reserve + wait)
+                    && option.Utility > _savingsFloor)
+                {
+                    // An attack the bot could pay for but is holding its gold back from. Nothing else may quietly
+                    // take that gold unless it is worth more than the attack the bot just declined.
+                    _savingsFloor = option.Utility;
+                }
+            }
+        }
+
+        private void AddOption(int slot, UnitDefinition card, Fix utility, FixVector2 target, string label)
+        {
+            _attackOptions.Add(new AttackOption { Slot = slot, Card = card, Utility = utility, Target = target, Label = label });
+        }
+
+        /// <summary>
+        /// The gold to hold back for the card the plan wants (the leader, a tank, anything the bot would rather push
+        /// with) when that card outranks everything it can pay for right now. Holding its whole cost means a cheaper
+        /// card is only played when there is still enough left for the goal, so the bot stops trickling its gold away
+        /// and actually gets its expensive cards onto the field. Zero when nothing is worth waiting for, and always
+        /// zero in sudden death, where the bot is all in. Defence ignores this; an unanswered push costs more than a
+        /// missed leader. A bot at the gold cap may always spend (see <see cref="CanAfford"/>), so saving can never
+        /// make it bank gold it would lose.
+        /// </summary>
+        private Fix SavingsGoal(Fix wait)
+        {
+            if (_suddenDeath)
+            {
+                return Fix.Zero;
+            }
+            Fix bestAffordable = Fix.MinValue;
+            int goal = -1;
+            for (int i = 0; i < _attackOptions.Count; i++)
+            {
+                AttackOption option = _attackOptions[i];
+                if (CanAfford(option.Card, _reserve + wait))
+                {
+                    if (option.Utility > bestAffordable)
+                    {
+                        bestAffordable = option.Utility;
+                    }
+                }
+                else if (goal < 0 || option.Utility > _attackOptions[goal].Utility)
+                {
+                    goal = i;
+                }
+            }
+            return goal >= 0 && _attackOptions[goal].Utility > bestAffordable
+                ? Fix.FromInt(_attackOptions[goal].Card.Cost)
+                : Fix.Zero;
         }
 
         /// <summary>
@@ -552,30 +653,81 @@ namespace NovaFaction.Sim.Bots
             }
             foreach (Economy.MineState mine in _s.Mines)
             {
-                if (mine.Owner == Player || IsMineCovered(mine.Position) || !FindDeployable(mine.Position, out FixVector2 target))
+                if (mine.Owner == Player || HasOwnUnitNear(mine.Position, MineGuardRadius, capturersOnly: true)
+                    || !FindDeployable(mine.Position, out FixVector2 target))
                 {
                     continue;
                 }
-                Add(ActionKind.Card, MineUtility * Personality.MineFocus, slot, target,
+                AddSpending(MineUtility * Personality.MineFocus, slot, target,
                     "mine " + mine.Index + " with " + cheapest.Id);
             }
         }
 
-        /// <summary>An own capturer (on the field or about to spawn) is already near the mine.</summary>
-        private bool IsMineCovered(FixVector2 mine)
+        // ------------------------------------------------------------ (d2) chests
+
+        /// <summary>
+        /// A chest waiting on the bot's own side of the field is free gold on the way to the front, so the cheapest
+        /// unit card in hand is dropped at the deployable cell nearest to it instead of at the lane point. It is
+        /// scored as the attack it replaces plus what the chest is worth, and paid for like that attack (reserve,
+        /// aggression wait and savings included), so fetching a chest never costs the bot a push and never becomes
+        /// the thing it spends its savings on. Like the mine drops this only points a unit that way: units never
+        /// walk to a chest on purpose, they collect one they pass, and a drop right on the spawn cell takes it as
+        /// soon as the unit appears. A chest nearer the enemy Keep than the bot's own is left alone, because going
+        /// for it means walking into the enemy's half. Skipped when an own unit or pending deploy is already there,
+        /// when the nearest deploy point is too far from the chest for the drop to count as going for it, and in
+        /// sudden death, where only structure damage wins.
+        /// </summary>
+        private void AddChests()
+        {
+            if (_suddenDeath || Personality.MineFocus == Fix.Zero)
+            {
+                return;
+            }
+            int best = -1;
+            for (int i = 0; i < _attackOptions.Count; i++)
+            {
+                UnitDefinition card = _attackOptions[i].Card;
+                if (!card.IsLeader && (best < 0 || card.Cost < _attackOptions[best].Card.Cost))
+                {
+                    best = i;
+                }
+            }
+            if (best < 0 || !CanAfford(_attackOptions[best].Card, _attackKeep + _savingsGoal))
+            {
+                return;
+            }
+            AttackOption option = _attackOptions[best];
+            Fix worth = ChestUtilityPerGold * _rules.ChestGold * Personality.MineFocus;
+            foreach (Economy.ChestState chest in _s.Chests)
+            {
+                if (!chest.IsPresent || !IsOnOwnSide(chest.Position)
+                    || HasOwnUnitNear(chest.Position, ChestGuardRadius, capturersOnly: false)
+                    || !FindDeployable(chest.Position, out FixVector2 target)
+                    || FixVector2.Distance(target, chest.Position) > ChestSendRadius
+                    || FixVector2.Distance(target, option.Target) > ChestDetourRadius)
+                {
+                    continue;
+                }
+                Add(ActionKind.Card, option.Utility + worth, option.Slot, target,
+                    "chest " + chest.Index + " with " + option.Card.Id);
+            }
+        }
+
+        /// <summary>An own unit (on the field or about to spawn) is already this close to a point on the map.</summary>
+        private bool HasOwnUnitNear(FixVector2 point, Fix radius, bool capturersOnly)
         {
             foreach (Unit unit in _s.Units)
             {
-                if (unit.Owner == Player && unit.IsAlive && unit.Definition.CanCapture
-                    && FixVector2.Distance(unit.Position, mine) <= MineGuardRadius)
+                if (unit.Owner == Player && unit.IsAlive && (!capturersOnly || unit.Definition.CanCapture)
+                    && FixVector2.Distance(unit.Position, point) <= radius)
                 {
                     return true;
                 }
             }
             foreach (PendingSpawn spawn in _s.PendingSpawns)
             {
-                if (spawn.Owner == Player && spawn.Definition.CanCapture
-                    && FixVector2.Distance(spawn.Target, mine) <= MineGuardRadius)
+                if (spawn.Owner == Player && (!capturersOnly || spawn.Definition.CanCapture)
+                    && FixVector2.Distance(spawn.Target, point) <= radius)
                 {
                     return true;
                 }
@@ -615,10 +767,15 @@ namespace NovaFaction.Sim.Bots
                 {
                     continue;
                 }
-                Fix utility = ownHalf
-                    ? SpellOwnHalfUtility + value * OwnHalfSpellValueWeight - need
-                    : SpellUtility + value - need;
-                Add(ActionKind.Card, utility, slot, aim, "cast " + spell.Id + " (value " + value + ")");
+                string label = "cast " + spell.Id + " (value " + value + ")";
+                if (ownHalf)
+                {
+                    Add(ActionKind.Card, SpellOwnHalfUtility + value * OwnHalfSpellValueWeight - need, slot, aim, label);
+                }
+                else
+                {
+                    AddSpending(SpellUtility + value - need, slot, aim, label);
+                }
             }
         }
 
@@ -925,6 +1082,11 @@ namespace NovaFaction.Sim.Bots
         /// <summary>Closer to the bot's own Keep than to the enemy Keep.</summary>
         private bool IsOnOwnHalf(FixVector2 p) =>
             FixVector2.Distance(p, _ownKeepCenter) < FixVector2.Distance(p, _enemyKeepCenter);
+
+        /// <summary>Not farther from the bot's own Keep than from the enemy Keep, so a point exactly on the center
+        /// line counts for both players.</summary>
+        private bool IsOnOwnSide(FixVector2 p) =>
+            FixVector2.Distance(p, _ownKeepCenter) <= FixVector2.Distance(p, _enemyKeepCenter);
 
         private bool IsOnMap(FixVector2 p)
         {

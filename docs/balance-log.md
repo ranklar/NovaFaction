@@ -72,3 +72,67 @@ Targets met at the baseline: sudden death (3.8% / 6.0%). Everything else is miss
 69.6%, aggressive wins 23.2%, the income ratio is 1.00 instead of 1.25-1.40, and essentially no structure ever falls,
 so the Keep-kill and tower-kill targets are at zero. The catapult is a huge outlier on structure damage per gold, but
 it is deployed only 0.17 times per match, so that number rests on 70 deploys over 200 matches.
+
+## Step 1 — bot fixes (no balance number changed)
+
+Three changes to the bot brain, all in sim/NovaFaction.Sim/Bots/BotController.cs. No content file and no balance
+number was touched, so the difference below is the bot alone. SimVersion is now 2.
+
+**(a) Saving for the card the plan wants.** The bot used to spend every coin it could afford, so its 6-cost leader
+never came out: by the time it had 6 gold it had already bought two cheap cards. `AddAttack` now scores every unit
+card in hand whether or not the bot can pay for it. If the best of those is one it cannot afford and it outranks
+everything it can, the bot holds that card's whole cost back (`SavingsGoal`) and only plays something cheaper when
+there is still enough left for the goal. A bot at the gold cap may always spend, so saving never makes it bank gold
+it would lose, and defence is never held back — an unanswered push costs more than a missed leader.
+
+The first version of this pushed the held gold straight into whatever cheap action was left (a mine drop, a chest),
+which is the opposite of saving. So a mine or chest drop, or an attacking spell, now has to beat the best attack the
+bot just declined (`_savingsFloor`) before it may break into the savings.
+
+**(b) Chests.** The bot had no chest behaviour at all: on twolane both of a player's own chests sit one row behind
+its own front line, and the timelines showed the enemy's units walking over them while the owner's units marched
+the other way. A chest drop is now modelled as the attack it replaces, routed via the chest: the cheapest non-leader
+card in hand, at the deployable cell nearest the chest, scored as that card's attack utility plus what the chest is
+worth (3 x chestGold x mineFocus), and paid for exactly like that attack. Only chests no farther from the bot's own
+Keep than from the enemy's are fetched, only when no own unit or pending deploy is already within 4 of the chest,
+and only when the drop point is within 6 of the lane point the bot is pushing — otherwise the bot splits its army
+across the map for 0.75 gold. Skipped in sudden death, where only structure damage wins.
+
+**(c) Other bugs.** None found that were clearly bugs rather than design weaknesses. What was checked: the bot never
+issues a command the sim rejects (an existing test already pins this); the lane, deploy-point and threat-grouping
+code is correct as written; command sequence numbers are per tick and never collide. The 59%/41% P0 win rate in the
+baseline mirror is seed variance, not a side bias: the same 400 matches from seed 5000 give 51.7%/48.2%.
+
+Two real weaknesses were found and deliberately left alone, because fixing either is a design change rather than a
+bug fix:
+- Every non-tank card scores the same attack utility, so which card the bot pushes with comes down to hand slot
+  order and cost. The catapult is the visible symptom: it is deployed 0.17 times per match while the knight goes
+  3.8 times, because at the same cost of 5 the Stone Golem always outranks it on the tank bonus and it can never
+  defend (structures only).
+- The bot has no model of tower fire, so it cannot tell a card that will reach a structure from one that dies on
+  the way. That is the whole reason attacking loses to defending here.
+
+### Numbers after step 1
+
+Round robin, 100 matches per ordered pairing:
+
+| bot | baseline | after step 1 | gold/match (baseline -> now) |
+| --- | --- | --- | --- |
+| turtle | 69.6% | **61.9%** | 74.3 -> 74.2 |
+| balanced | 58.2% | **54.9%** | 74.3 -> 74.6 |
+| swarm | 48.9% | **51.7%** | 74.1 -> 75.1 |
+| aggressive | 23.2% | **31.5%** | 73.1 -> 74.1 |
+
+Overall rates: Keep kill 0.0% (unchanged), tower kill 0.5% (0.2%), sudden death 3.5% (3.8%).
+Active-versus-turtle income: **1.013** (1.001).
+
+Balanced mirror, 200 matches: Keep kill 0.0%, tower kill 0.0%, sudden death 4.5%, mean gold 75.0/74.2 per side
+(63.1 base, 8.6/7.7 mine, 3.4 chest), chests collected 4.5 per side (3.8 at the baseline).
+
+The leader is the clearest win. In 100 aggressive-versus-aggressive matches the warlord was deployed **0 times** at
+the baseline and **1.25-1.46 times per match** now, and War Cry went from never to 0.36-0.43 uses per match. The
+balanced bot against a do-nothing opponent still destroys the Keep in 100% of 20 matches (95% at the baseline).
+
+No target is met by the bot fixes alone, but the spread of personalities is much tighter (the gap between the best and the
+worst personality fell from 46.4 to 30.4 points) and the economy target moved
+the right way. Everything else needs balance numbers.

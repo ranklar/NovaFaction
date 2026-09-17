@@ -393,6 +393,172 @@ public class BotTests
         AssertNoRejectedCommands(sim.State);
     }
 
+    // ------------------------------------------------------------ saving for the card the plan wants
+
+    /// <summary>The default deck without the Stone Golem, so the 6-cost leader is the only card the bot rates a tank.</summary>
+    private static readonly string[] NoGolemDeck =
+        { "catapult", "knight", "goblin_pack", "elf_archer", "griffin", "warlord", "fireball", "blizzard" };
+
+    /// <summary>A quiet sim (no income, nothing shoots) whose only tank card is the leader.</summary>
+    private static Simulation SavingSim(BotPersonality bot, string startGold) =>
+        new Simulation(TestSim.Setup(TestSim.Rules(income: "0", start: startGold), MapTestData.LoadTwoLane(), Quiet(),
+            NoGolemDeck).WithBot(0, bot), 1);
+
+    /// <summary>A saving sim in which chests are on the field from the first tick.</summary>
+    private static Simulation ChestSim(BotPersonality bot, string startGold) =>
+        new Simulation(TestSim.Setup(TestSim.Rules(income: "0", start: startGold, chestFirst: "0", chestInterval: "30"),
+            MapTestData.LoadTwoLane(), Quiet(), NoGolemDeck).WithBot(0, bot), 1);
+
+    /// <summary>Parks a capturer next to each mine so the bot has no mine left to send anyone to.</summary>
+    private static void CoverBothMines(Simulation sim)
+    {
+        // Far enough from the chests at (3, 11) and (14, 11) that they do not count as covered too.
+        Place(sim, 0, "knight", "5.5", "17.5"); // mine 0 is the cell (5, 15)
+        Place(sim, 0, "knight", "13.5", "17.5"); // mine 1 is the cell (12, 16)
+    }
+
+    [Fact]
+    public void Bot_SavesForTheLeader_InsteadOfSpendingOnCheaperAttacks()
+    {
+        // Nothing threatens and no map gold is wanted, so the only thing to do is push. The 6-cost leader leads a
+        // push and the cheaper cards in hand only trickle, so with 5 gold the bot must sit on its gold.
+        Simulation sim = SavingSim(Sharp(aggression: "1", mineFocus: "0"), startGold: "5");
+        PlayerState p0 = sim.State.GetPlayer(0);
+        TestSim.EnsureInHand(p0, "warlord");
+        Assert.Contains(TestSim.HandIds(p0), id => id != null && id != "warlord"); // something cheaper is in hand too
+
+        Step(sim, 100);
+        Assert.Empty(CommandsOf(sim.Log, 0, CommandType.DeployCard));
+        Assert.Equal(Fix.FromInt(5), p0.Gold);
+
+        // One more gold and the leader goes down; nothing cheaper was played in the meantime.
+        p0.Gold = Fix.FromInt(6);
+        Step(sim, 20);
+        Assert.Single(CommandsOf(sim.Log, 0, CommandType.DeployCard));
+        Assert.Contains("warlord", ((BotController)sim.GetController(0)).LastAction);
+        PendingSpawn spawn = Assert.Single(sim.State.PendingSpawns);
+        Assert.Equal("warlord", spawn.Definition.Id);
+        AssertNoRejectedCommands(sim.State);
+    }
+
+    [Fact]
+    public void Bot_WithNothingBetterToWaitFor_SpendsAsBefore()
+    {
+        // The same position without the leader in hand: there is nothing worth saving for, so the bot plays at once.
+        Simulation sim = SavingSim(Sharp(aggression: "1", mineFocus: "0"), startGold: "5");
+        PlayerState p0 = sim.State.GetPlayer(0);
+        while (TestSim.SlotOf(p0, "warlord") >= 0)
+        {
+            p0.Cards.Play(TestSim.SlotOf(p0, "warlord"));
+        }
+        Step(sim, 20);
+        Assert.NotEmpty(CommandsOf(sim.Log, 0, CommandType.DeployCard));
+    }
+
+    [Fact]
+    public void Bot_StillDefendsWhileSavingForTheLeader()
+    {
+        // Saving never holds back a defence: an unanswered push costs more than a missed leader.
+        Simulation sim = SavingSim(Sharp(aggression: "1", mineFocus: "0"), startGold: "5");
+        PlayerState p0 = sim.State.GetPlayer(0);
+        TestSim.EnsureInHand(p0, "warlord");
+        Step(sim, 40);
+        Assert.Empty(CommandsOf(sim.Log, 0, CommandType.DeployCard)); // saving
+
+        Place(sim, 1, "knight", "4", "11");
+        Place(sim, 1, "goblin_pack", "5", "11.5");
+        Place(sim, 1, "goblin_pack", "3.5", "11.5");
+        Step(sim, 20);
+        Assert.NotEmpty(CommandsOf(sim.Log, 0, CommandType.DeployCard));
+        Assert.StartsWith("defend tower_0_west", ((BotController)sim.GetController(0)).LastAction);
+        Assert.True(p0.Gold < Fix.FromInt(5), "the defender was paid for out of the savings");
+        AssertNoRejectedCommands(sim.State);
+    }
+
+    [Fact]
+    public void Bot_DoesNotSpendItsSavingsOnALowerValueMineDrop()
+    {
+        // A bot that cares little about mines would rather wait for the card its push wants than trickle the gold
+        // into a capturer: saving must not simply push the gold into whatever cheap action is left.
+        Simulation sim = SavingSim(Sharp(aggression: "1", mineFocus: "0.1"), startGold: "5");
+        TestSim.EnsureInHand(sim.State.GetPlayer(0), "warlord");
+        Step(sim, 100);
+        Assert.Empty(CommandsOf(sim.Log, 0, CommandType.DeployCard));
+    }
+
+    [Fact]
+    public void Bot_SpendsItsSavingsOnAMineWhenMinesMatterMoreThanThePush()
+    {
+        // The same position with a mine-hungry, unaggressive personality: the mine drop is worth more than the push
+        // the bot is declining, so breaking into the savings for it is the better play.
+        Simulation sim = SavingSim(Sharp(aggression: "0", mineFocus: "1"), startGold: "5");
+        TestSim.EnsureInHand(sim.State.GetPlayer(0), "warlord");
+        Step(sim, 40);
+        Assert.NotEmpty(CommandsOf(sim.Log, 0, CommandType.DeployCard));
+        Assert.StartsWith("mine ", ((BotController)sim.GetController(0)).LastAction);
+    }
+
+    // ------------------------------------------------------------ chests
+
+    [Fact]
+    public void Bot_SendsAUnitForAChestOnItsOwnSideOfTheLaneItIsPushing()
+    {
+        Simulation sim = ChestSim(Sharp(aggression: "0", mineFocus: "1"), startGold: "10");
+        Assert.All(sim.State.Chests, c => Assert.True(c.IsPresent));
+        CoverBothMines(sim);
+        Step(sim, 1); // the first decision is made on tick 0
+
+        Command deploy = Assert.Single(CommandsOf(sim.Log, 0, CommandType.DeployCard));
+        Assert.StartsWith("chest 0 ", ((BotController)sim.GetController(0)).LastAction);
+        // Chest 0 sits on the cell (3, 11), in the west lane the bot pushes first (both towers are at full hp).
+        Assert.Equal(sim.State.Chests[0].Position, deploy.Target);
+        AssertNoRejectedCommands(sim.State);
+    }
+
+    [Fact]
+    public void Bot_CollectsTheChestItWasSentFor()
+    {
+        Simulation sim = ChestSim(Sharp(aggression: "0", mineFocus: "1"), startGold: "10");
+        CoverBothMines(sim);
+        Step(sim, 60); // decide, spawn delay, collect
+        Assert.False(sim.State.Chests[0].IsPresent);
+        Assert.True(sim.State.GetPlayer(0).GoldFromMap > Fix.Zero);
+    }
+
+    [Fact]
+    public void Bot_LeavesTheEnemySideChestsAlone()
+    {
+        // Chests 2 and 3 are nearer player 1's Keep, so player 0 never drops a unit for them. (Its units may still
+        // walk over one on their way to the enemy base; that is the normal pass-by pickup, not a decision.)
+        Simulation sim = ChestSim(Sharp(aggression: "0", mineFocus: "1"), startGold: "10");
+        var bot = (BotController)sim.GetController(0);
+        CoverBothMines(sim);
+        var fetched = new SortedSet<string>(StringComparer.Ordinal);
+        for (int i = 0; i < 400; i++)
+        {
+            sim.State.GetPlayer(0).Gold = Fix.FromInt(10);
+            sim.Tick();
+            if (bot.LastAction.StartsWith("chest ", StringComparison.Ordinal))
+            {
+                fetched.Add(bot.LastAction.Substring(0, "chest 0".Length));
+            }
+        }
+        Assert.NotEmpty(fetched);
+        Assert.All(fetched, name => Assert.Contains(name, new[] { "chest 0", "chest 1" }));
+    }
+
+    [Fact]
+    public void Bot_DoesNotSendASecondUnitForAChestItIsAlreadyFetching()
+    {
+        Simulation sim = ChestSim(Sharp(aggression: "0", mineFocus: "1"), startGold: "10");
+        CoverBothMines(sim);
+        Step(sim, 1);
+        Assert.StartsWith("chest 0 ", ((BotController)sim.GetController(0)).LastAction);
+        sim.State.GetPlayer(0).Gold = Fix.FromInt(10);
+        Step(sim, 15);
+        Assert.DoesNotContain("chest 0 ", ((BotController)sim.GetController(0)).LastAction);
+    }
+
     [Fact]
     public void AggressiveBot_DeploysMoreInTheFirstMinuteThanTheTurtle()
     {

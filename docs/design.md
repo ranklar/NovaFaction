@@ -235,6 +235,7 @@ Themed factions released over time as content packs; fantasy faction first.
     match (about 63 base, 5-10 mines, 1-7 chests), so active and turtle bots earn about the same (ratio about 1.0 against
     the 1.33 target); the turtle collects the most chests. The aggressive bot never deploys its
     6-cost warlord (it rarely holds 6 gold).
+  - Tuning sessions and their numbers are logged in docs/balance-log.md against the targets in "Balance targets".
 - Sim map layer (sim/NovaFaction.Sim/Map):
   - Map files: content/maps/<id>.json with formatVersion (1), id (a-z 0-9 _ -), cellSize (world units
     per cell, 1/16..64), grid, structures, deployZones. Unknown keys are errors.
@@ -648,10 +649,28 @@ Themed factions released over time as content packs; fantasy faction first.
     own tank (tank slot or max hp 1000+, so the warlord counts) is already pushing that lane, other cards drop 2 behind
     it; otherwise a tank card leads, and other cards lead with a lower score that grows with aggression. Attacks keep
     goldReserve plus 3 * (1 - aggression) gold in hand, but a bot at the gold cap always may spend.
+  - (c2) Saving (decided and implemented Sept 2026, replacing "spend whatever you can afford"): every unit card in hand
+    is scored for the attack whether or not the bot can pay for it. When the best of those is one it cannot afford and
+    it outranks everything it can, the bot holds that card's whole cost back on top of the reserve and the attack wait,
+    so a cheaper card is only played when there is still enough left for the card the plan wants. This is what makes an
+    aggressive bot play its 6-cost leader at all; before it, the leader never reached the field. Defence never respects
+    the saving (an unanswered push costs more than a missed leader), sudden death turns it off, and a bot at the gold
+    cap may always spend, so saving can never make it bank gold the cap would swallow. Mine and chest drops and
+    attacking spells may break into the savings, but only when they outrank the best attack the bot just declined;
+    otherwise saving would simply push the gold into whatever cheap action was left.
   - (d) Mines: with mineFocus above 0, the cheapest capture-capable non-leader card in hand is dropped on the deployable
     cell nearest to each mine the bot does not own, unless an own capturer (on the field or pending) is within 6 of it.
     On twolane no deploy cell touches a mine, so this sends the capturer down that mine's lane and it stops as it passes
     (see "Capture behavior"). Keeps goldReserve.
+  - (d2) Chests (implemented Sept 2026; the bot used to ignore chests entirely and walk its units past its own): a chest
+    drop is the attack it replaces, routed via the chest. The cheapest non-leader unit card in hand is dropped on the
+    deployable cell nearest the chest, scored as that card's attack utility plus what the chest is worth
+    (3 * chestGold * mineFocus), and paid for exactly like that attack, savings included. A chest is fetched only when
+    it is no farther from the bot's own Keep than from the enemy's (a chest exactly on the center line counts for
+    both), no own unit or pending deploy is within 4 of it, the drop point is within 6 of the chest, and the drop point
+    is within 6 of the lane point the bot is pushing, so the bot never splits its army across the map for one chest.
+    Off in sudden death. Units still never walk to a chest on purpose; the drop only points one that way, and a drop on
+    the spawn cell itself collects the chest as soon as the unit appears.
   - (e) Spells: every enemy unit the spell can hit, every enemy structure it can hurt, and the value-weighted center of
     what each such candidate hits are tried as aim points. Value = for each enemy unit in radius its unit value times the
     share of its hp the spell removes (all pulses, level scaled; at most 1), plus 8 per enemy structure the spell would
@@ -721,16 +740,22 @@ Progress against them is logged per iteration in docs/balance-log.md.
   (Sept 2026) shows active bots do not earn more than the turtle (ratio about 1.0, target 1.33); tune the numbers and/or
   the bots' mine and chest behavior.
 - Units still never walk to a mine or chest on purpose (their objective is always a structure); since
-  Sept 2026 capturers stop at mines they happen to pass. The bot deploys capturers toward mines on purpose (Sept 2026); mission design
-  must too. Revisit if players find mines hard to hold.
+  Sept 2026 capturers stop at mines they happen to pass. The bot deploys capturers toward mines and cheap units toward
+  its own chests on purpose (Sept 2026); mission design must too. Revisit if players find mines hard to hold.
 - Capture give-up (Sept 2026) replaced the old "held at a contested mine for good" behavior; its 3 s / 6 s
   times are placeholders to tune in the headless harness.
 - Crowding at structures (fixed Sept 2026 with the weak stopped push and sideways slide): a busy
   scripted battle test requires that every living unit is Attacking or Holding at the end.
+- SimVersion is 2 (Sept 2026): the bot saves toward the card its plan wants and fetches chests on its own side, so
+  replays written against version 1 no longer re-run.
 - Bot (Sept 2026): personality values and the brain constants are placeholders; tune them in the headless harness.
   Bot vs bot on the shipped numbers is close to a stalemate: towers win most fights, so matches usually end on a
   small score difference and rarely by a Keep kill (a lone balanced bot does destroy a passive opponent's Keep). The
   bot does not chase chests, does not predict unit movement when aiming spells, and does not yet read the
   opponent's likely hand. Campaign difficulty knobs (enemy levels, income multiplier) are not wired to bots yet.
   Harness baseline (Sept 2026): aggressive is the weakest personality (23% overall) and never plays its leader; no
-  pairing produces Keep kills.
+  pairing produces Keep kills. The leader and chest problems were fixed Sept 2026 (see "Controllers and bots" (c2)
+  and (d2)); two known weaknesses remain, both design rather than bugs: every non-tank card scores the same attack
+  utility, so the card the bot pushes with comes down to hand slot order and cost (the catapult is nearly a dead
+  card), and the bot has no model of tower fire, so it cannot tell a card that will reach a structure from one that
+  dies on the way.

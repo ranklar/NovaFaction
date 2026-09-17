@@ -22,8 +22,10 @@ Themed factions released over time as content packs; fantasy faction first.
   Destroying a forward tower extends the attacker's deploy zone onto that side.
 - Resource: Gold (display name is faction data). Steady base income plus two map sources:
   gold mines (neutral, capturable, extra income, capped) and gold chests (spawn on the
-  field, collected by walking a unit over them). Target: active player earns 1.25-1.40 times a turtle
-  (see "Balance targets"; the band replaces the older "about 1/3 more" wording, which meant the same thing).
+  field, collected by walking a unit over them). Target: active player earns 1.20-1.40 times a turtle
+  (see "Balance targets"; the band replaces the older "about 1/3 more" wording, which meant the same thing, and its
+  floor was lowered from 1.25 to 1.20 in Sept 2026). Map gold must also stay at most 35% of an active player's
+  income, so the map never outweighs base income.
   Implemented Sept 2026; see "Map gold" under Technical architecture for the rules and the arithmetic.
 - Stored gold caps at 10. Card costs 1-7.
 - Cards are units or spells (implemented Sept 2026; see "Spells"). Spells can be cast anywhere on the map.
@@ -90,6 +92,16 @@ Themed factions released over time as content packs; fantasy faction first.
 
 ## Technical architecture
 - client/: Unity 6.3 LTS, URP, Android first. Renders sim state; no game rules in Unity code.
+- The sim reaches Unity as a prebuilt DLL, not as source (decided Sept 2026). Unity's project settings are set to
+  .NET Standard 2.1, which is what sim/ targets, so tools/sync-to-unity.ps1 builds the library in Release and copies
+  NovaFaction.Sim.dll to client/Assets/Plugins/NovaFaction/. The same script mirrors content/**/*.json into
+  client/Assets/Resources/content/, because Unity cannot read files outside Assets/ on a phone. Both copies are
+  committed and the script must be re-run after any sim or content change. Compiling sim/ inside Unity was rejected:
+  the sim has to stay buildable and testable without the editor, and one prebuilt binary is what the server will use
+  too. client/Assets/Scripts/ContentLoader.cs hands the JSON text to the same sim loaders the harness uses, so client
+  and harness build identical content; SimSmokeTest.cs plays one headless match on Start and shows its final state
+  hash, which must equal the harness's for the same seed. That is the cross-platform determinism check on real
+  hardware.
 - sim/: netstandard2.1 C# library. Deterministic: fixed-point math, seeded RNG, fixed 20 ticks/s,
   flow-field pathfinding on a grid. Headless bot-vs-bot matches (HeadlessMatch; see "Controllers and bots") and a harness
   console app (tools/NovaFaction.Harness; see "Headless harness"); per-tick state hash for cross-platform determinism checks;
@@ -712,8 +724,13 @@ The numbers a tuning session aims at. They are measured with the headless harnes
 100 matches per ordered pairing for the win rates and the income ratio, and balanced-vs-balanced batches of 200
 matches for the mirror numbers. Every value they are reached with is still a placeholder.
 - Turtle personality overall win rate at or below 45%; no personality above 60% or below 40%.
-- Active-versus-turtle income ratio between 1.25 and 1.40 (this replaces the older "about 1/3 more" wording with a
-  band; the target itself is unchanged).
+- Active-versus-turtle income ratio between 1.20 and 1.40. The band replaced the older "about 1/3 more" wording;
+  the floor was then lowered from 1.25 to 1.20 (Sept 2026) because the two levers that raise the ratio further (mine
+  income and chest gold) pull against the Keep-kill target, and 1.20 already gives an active player a clear edge.
+- Guard: map gold (mines plus chests) at most 35% of an active player's total income (Sept 2026). The income ratio
+  alone can be met by making base income small, which would turn the match into a race for the map and leave a player
+  who loses both mines with almost nothing to spend. This caps how far the mine and chest levers may be pushed. The
+  harness prints the split per side (batch, gold base/mine/chest).
 - Keep-kill rate in balanced mirror matches between 20% and 35%, and at least one forward tower destroyed in at
   least 60% of those matches.
 - Sudden death in fewer than 10% of matches.
@@ -733,6 +750,11 @@ Progress against them is logged per iteration in docs/balance-log.md.
 
 ## Open items
 - Studio name and Android package identifier.
+- Match pace has only ever been judged from harness numbers, never played. With base income at 0.2 gold/s a side
+  spends roughly 13 cards in a 3:00 match, which is far fewer than the genre norm. Judge it by hand on the phone in
+  the vertical slice (M2): does the match feel slow or empty, and is 13 cards per side too few? Base income is the
+  first lever, but raising it changes the income ratio and the 35% map-gold guard, so re-run the harness targets
+  after any change.
 - Fantasy roster: the 16 units and 2 leaders.
 - Income, cost and match-length numbers (tune in the headless harness).
 - Replays are verified in-process; the server side (M3) still has to store and verify them. Replay files are not
@@ -753,10 +775,10 @@ Progress against them is logged per iteration in docs/balance-log.md.
   placeholders. Structure hp and damage were tuned in the Sept 2026 session and towers no longer win every fight;
   range, aggro radius, stopped push and crowd penalty have never been tuned.
 - Map gold numbers (all eight rules.json values) are placeholders built on the arithmetic in "Map gold". The Sept
-  2026 session took the active-versus-turtle ratio from 1.00 to 1.20 against a 1.25-1.40 target, by fixing the bot's
-  chest behavior, moving the chest spawns forward, raising mine income and chest gold and lowering base income. It is
-  the one balance target still missed, and the last two levers pull against the Keep-kill target (see the end of
-  docs/balance-log.md for what to try next).
+  2026 session took the active-versus-turtle ratio from 1.00 to 1.20, by fixing the bot's chest behavior, moving the
+  chest spawns forward, raising mine income and chest gold and lowering base income. The last two levers pull against
+  the Keep-kill target, so the target's floor was lowered to 1.20 and the 35% map-gold guard was added instead of
+  pushing them further (see the end of docs/balance-log.md for what to try next).
 - Units still never walk to a mine or chest on purpose (their objective is always a structure); since
   Sept 2026 capturers stop at mines they happen to pass. The bot deploys capturers toward mines and cheap units toward
   its own chests on purpose (Sept 2026); mission design must too. Revisit if players find mines hard to hold.

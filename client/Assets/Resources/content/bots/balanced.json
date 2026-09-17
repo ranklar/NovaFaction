@@ -1,0 +1,12 @@
+{
+  "formatVersion": 1,
+  "id": "balanced",
+  "reactionDelaySeconds": 0.75,
+  "decisionQuality": 0.8,
+  "aggression": 0.5,
+  "defensiveness": 0.5,
+  "mineFocus": 0.4,
+  "spellUsage": 0.5,
+  "goldReserve": 2,
+  "placeholder": true
+}

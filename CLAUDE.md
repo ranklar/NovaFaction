@@ -15,6 +15,8 @@ verify it. He uses Windows 11 only — give PowerShell commands, never bash/WSL/
 - docs/     Design doc and notes.
 - tools/    NovaFaction.Harness: .NET 10 console app for headless batches, round robins, determinism and replay
             checks. May use System.Text.Json and Parallel (the sim may not). Output goes to tools/out/ (ignored by git).
+            sync-to-unity.ps1 pushes the built sim and the content into the Unity client (see "Getting the sim into
+            Unity").
 - builds/   Local build output. Ignored by git.
 
 ## Sim rules (sim/NovaFaction.Sim) — determinism is non-negotiable
@@ -39,6 +41,22 @@ verify it. He uses Windows 11 only — give PowerShell commands, never bash/WSL/
 - Edit C# scripts and JSON only. Do not hand-edit scenes, prefabs, .meta files, or
   ProjectSettings unless explicitly asked — Glenn does those in the Unity editor with guidance.
 - Never touch client/Library, client/Temp, client/Logs.
+
+### Getting the sim into Unity
+Unity does not compile sim/ and does not read content/. It uses a prebuilt DLL and its own copy of the JSON, so
+after ANY change to sim/ or content/ run:
+
+    powershell -ExecutionPolicy Bypass -File tools\sync-to-unity.ps1
+
+It builds sim/NovaFaction.Sim in Release, copies NovaFaction.Sim.dll to client/Assets/Plugins/NovaFaction/ and
+mirrors content/**/*.json into client/Assets/Resources/content/. It is idempotent and prints what it copied.
+- Both copies are committed: the DLL is small and Git LFS tracks *.dll, and the JSON has to ship in the build.
+  Forgetting the script leaves the client running old rules, which shows up as a state hash that no longer
+  matches the harness.
+- client/Assets/Resources/content/ is generated. Never edit it by hand; edit content/ and re-run the script.
+- client/Assets/Scripts/ContentLoader.cs loads that JSON through the same sim loaders the harness uses, so the
+  client and the harness build identical content. SimSmokeTest.cs plays one headless match and shows its final
+  state hash on screen; it must equal the harness's for the same seed.
 
 ## Server rules (server/, from M3)
 - The server is authoritative for accounts, economy and match results. Never trust a

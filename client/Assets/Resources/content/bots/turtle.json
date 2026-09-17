@@ -1,0 +1,12 @@
+{
+  "formatVersion": 1,
+  "id": "turtle",
+  "reactionDelaySeconds": 1,
+  "decisionQuality": 0.8,
+  "aggression": 0.15,
+  "defensiveness": 0.9,
+  "mineFocus": 0.2,
+  "spellUsage": 0.4,
+  "goldReserve": 5,
+  "placeholder": true
+}

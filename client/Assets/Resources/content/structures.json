@@ -1,0 +1,27 @@
+{
+  "formatVersion": 1,
+  "structures": [
+    {
+      "kind": "keep",
+      "hp": 1700,
+      "damage": 55,
+      "attackIntervalSeconds": 1,
+      "range": 6,
+      "targets": "both",
+      "projectileSpeed": 10,
+      "destructionBonus": 1000,
+      "placeholder": true
+    },
+    {
+      "kind": "tower",
+      "hp": 1000,
+      "damage": 48,
+      "attackIntervalSeconds": 0.8,
+      "range": 7,
+      "targets": "both",
+      "projectileSpeed": 10,
+      "destructionBonus": 500,
+      "placeholder": true
+    }
+  ]
+}

@@ -22,7 +22,8 @@ Themed factions released over time as content packs; fantasy faction first.
   Destroying a forward tower extends the attacker's deploy zone onto that side.
 - Resource: Gold (display name is faction data). Steady base income plus two map sources:
   gold mines (neutral, capturable, extra income, capped) and gold chests (spawn on the
-  field, collected by walking a unit over them). Target: active player earns ~1/3 more than a turtle.
+  field, collected by walking a unit over them). Target: active player earns 1.25-1.40 times a turtle
+  (see "Balance targets"; the band replaces the older "about 1/3 more" wording, which meant the same thing).
   Implemented Sept 2026; see "Map gold" under Technical architecture for the rules and the arithmetic.
 - Stored gold caps at 10. Card costs 1-7.
 - Cards are units or spells (implemented Sept 2026; see "Spells"). Spells can be cast anywhere on the map.
@@ -112,8 +113,9 @@ Themed factions released over time as content packs; fantasy faction first.
     multiplier, gold income/start/cap, spawn delay, hand and deck size, unit separation, stopped push
     and spawn spacing, aggro radius, melee crowd penalty, and the eight map gold values). Every key is
     required; unknown keys are errors. JSON has no comments, so values that are still guesses are listed
-    by name in "tuningPlaceholders". Current placeholders: base income 0.35 gold/s (about Clash Royale's
-    pace), 5 starting gold, the four unit movement values (see "Units, decks and movement"), the two
+    by name in "tuningPlaceholders". Current placeholders: base income 0.2 gold/s (lowered from 0.35 in the Sept 2026
+    tuning session so that map gold is a large enough share of a player's income for the active-versus-turtle target to
+    be reachable at all; see docs/balance-log.md iteration 6), 5 starting gold, the four unit movement values (see "Units, decks and movement"), the two
     targeting values (see "Combat and match resolution"), all eight map gold values (see "Map gold"), the two
     capture give-up times (mineCaptureGiveUpSeconds 3, mineCaptureRetrySeconds 6; see "Map gold") and the two level
     values (maxUnitLevel 15, levelStatBonusPerLevel 0.06; see "Stat modifiers, levels and leaders").
@@ -281,6 +283,10 @@ Themed factions released over time as content packs; fantasy faction first.
     one mine at the inner edge of each gap (one on each side of the center line), two chest spawns
     per lane, base deploy zones = each player's 13 rows nearest their Keep, tower unlocks = a 9x6
     block in front of the fallen tower's half of the field.
+    Chest spawns are in the lane gaps at (2,14), (15,14), (2,17) and (15,17), two on each player's side of the
+    center line and both outside every deploy zone, so a chest can only be taken by sending a unit forward. (Moved
+    there Sept 2026 from (3,11), (14,11), (3,20) and (14,20), one row behind each player's own front line, where a
+    turtle collected more of them than an attacker did.)
 - Units, decks and movement (sim/NovaFaction.Sim/Content, Cards, Units):
   - Unit files: content/factions/<faction>/units.json with formatVersion (1), faction (id), units.
     Each unit: id (a-z 0-9 _ -, unique across the faction's units and spells), displayName, slot (tank,
@@ -295,7 +301,8 @@ Themed factions released over time as content packs; fantasy faction first.
     hash (from parsed data) is part of the state hash.
   - content/factions/fantasy/units.json: 7 placeholder units, one per requested job: stone_golem
     (tank), knight (bruiser), goblin_pack (swarm of 4), elf_archer (ranged), griffin (flyer),
-    catapult (siege) and warlord (leader). The fire_spirit spell stand-in was removed in Sept 2026 when the
+    catapult (siege) and warlord (leader). Sept 2026 tuning: goblin_pack cost 3 -> 4 and catapult damage 250 -> 110,
+    the two cards the harness flagged as efficiency outliers. The fire_spirit spell stand-in was removed in Sept 2026 when the
     Fireball spell replaced it. Every number is a placeholder. Ranged: elf_archer (projectile 10/s) and
     catapult (6/s). Splash: catapult (1.25). Structures only: stone_golem and catapult. Capturers (by the
     default rule): knight, goblin_pack, elf_archer, warlord. The warlord's passive (+10% damage for bruiser and
@@ -373,9 +380,10 @@ Themed factions released over time as content packs; fantasy faction first.
 - Combat and match resolution (sim/NovaFaction.Sim/Combat):
   - content/structures.json: formatVersion (1) and one entry per kind, "keep" and "tower" (the map file
     names): hp, damage, attackIntervalSeconds, range, targets, projectileSpeed, destructionBonus, optional
-    "placeholder". All current numbers are placeholders: Keep 4000 HP, 90 damage every 1 s, range 6,
-    bonus 1000; tower 2500 HP, 80 damage every 0.8 s, range 7, bonus 500; both target both layers and
-    shoot at 10 units/s. The Keep attacks from the start (no Clash Royale style activation yet).
+    "placeholder". All current numbers are placeholders: Keep 1700 HP, 55 damage every 1 s, range 6,
+    bonus 1000; tower 1000 HP, 48 damage every 0.8 s, range 7, bonus 500; both target both layers and
+    shoot at 10 units/s. (Sept 2026 tuning: the hp and damage numbers came down from Keep 4000/90 and tower 2500/80,
+    which made towers win nearly every fight - see docs/balance-log.md iterations 1, 2 and 7.) The Keep attacks from the start (no Clash Royale style activation yet).
     Its content hash is part of the state hash. Each player's structures have a structure level (MatchSetup,
     default 1, 1..maxUnitLevel) that scales their hp and damage like a card level (StructureState.MaxHp and
     Damage); the other stats and the destruction bonus are not scaled.
@@ -473,16 +481,24 @@ Themed factions released over time as content packs; fantasy faction first.
     used up even if the player is full.
   - GoldFromMap per player = mine income and chest gold actually added to the bank (gold lost at the
     cap does not count). Tie-break rule 3 uses it.
-  - Placeholder values and the 1/3 target (twolane, 3:00, base income 0.35/s):
-    - a turtle earns 0.35 * 180 = 63 gold;
-    - mines: mineIncomePerSecond 0.05, mineIncomeCap 0.1 (both mines). Allowing for walking there,
-      the 4 s capture (mineCaptureSeconds) and losing a mine now and then, assume both are held for
-      about 120 s: 0.1 * 120 = 12 gold;
+  - Placeholder values and the active-versus-turtle target (twolane, 3:00, base income 0.2/s). Retuned Sept 2026;
+    the numbers below are what the harness measures, not an estimate:
+    - base income is 0.2 * 180 = 36 gold, but matches now often end early, so both players bank about 33;
+    - mines: mineIncomePerSecond 0.09, mineIncomeCap 0.18 (both mines). An active bot banks about 14.5 gold from
+      mines, a turtle about 9.8;
     - chests: waves at 30, 60, 90, 120 and 150 s (chestFirstSpawnSeconds 30, chestSpawnIntervalSeconds
-      30) at 4 spawn points = at most 20 chests in regulation; an active player who takes 12 of them
-      at chestGold 0.75 gets 9 gold;
-    - 12 + 9 = 21 = 63 / 3, so the active player banks about 84 against the turtle's 63, if they keep
-      spending so the cap does not swallow it.
+      30) at 4 spawn points = at most 20 chests in regulation. At chestGold 3 an active bot banks about 8.6 gold
+      from chests and a turtle about 4.1;
+    - so map gold is about 23 for an active player and 14 for a turtle, and the totals are about 57 against 47:
+      a ratio of 1.20 against the 1.25-1.40 target (see "Balance targets" and docs/balance-log.md).
+    - The chest spawns were moved into the river lanes in the same session. Before that they sat one row behind each
+      player's own front line, and the turtle collected 2.4 times as much chest gold as an active player, which is
+      the opposite of what chests are for. Chests are now the most asymmetric income in the game (an active bot takes
+      about 2.1 times the turtle's chest gold, against 1.5 for mines).
+    - Why the target is hard: with base income B, map gold A for an active player and T for a turtle, and the
+      measured A = 1.9 T, the target (B + A) / (B + T) >= 1.25 needs T >= 0.4 B. Base income is the denominator the
+      target fights, which is why it had to come down. Raising chest gold further reaches the ratio but pushes the
+      Keep-kill rate out of its band, because it is the same gold.
     - mineCaptureRadius 1.5 (cells next to the mine, diagonals included) and chestCollectRadius 0.75
       (a unit walking through the spawn cell) are feel values. Capturing units stop at a mine they pass (see
       below), so one unit is enough. Tune all eight in the headless harness.
@@ -734,11 +750,13 @@ Progress against them is logged per iteration in docs/balance-log.md.
 - Keep activation: the Keep shoots from the start. Clash Royale only wakes the king tower once it is
   hit or a tower falls; decide when tuning.
 - Combat numbers (structure HP/damage/range, aggro radius, stopped push, crowd penalty) are
-  placeholders; with the shipped numbers towers win most fights against a trickle of units. Tune in
-  the headless harness.
-- Map gold numbers (all eight rules.json values) are placeholders built on the arithmetic in "Map gold". The harness
-  (Sept 2026) shows active bots do not earn more than the turtle (ratio about 1.0, target 1.33); tune the numbers and/or
-  the bots' mine and chest behavior.
+  placeholders. Structure hp and damage were tuned in the Sept 2026 session and towers no longer win every fight;
+  range, aggro radius, stopped push and crowd penalty have never been tuned.
+- Map gold numbers (all eight rules.json values) are placeholders built on the arithmetic in "Map gold". The Sept
+  2026 session took the active-versus-turtle ratio from 1.00 to 1.20 against a 1.25-1.40 target, by fixing the bot's
+  chest behavior, moving the chest spawns forward, raising mine income and chest gold and lowering base income. It is
+  the one balance target still missed, and the last two levers pull against the Keep-kill target (see the end of
+  docs/balance-log.md for what to try next).
 - Units still never walk to a mine or chest on purpose (their objective is always a structure); since
   Sept 2026 capturers stop at mines they happen to pass. The bot deploys capturers toward mines and cheap units toward
   its own chests on purpose (Sept 2026); mission design must too. Revisit if players find mines hard to hold.

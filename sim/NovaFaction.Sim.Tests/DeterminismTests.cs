@@ -82,13 +82,14 @@ public class DeterminismTests
     [InlineData(7UL)]
     public void BusyScriptedBattle_HashesIdenticallyEveryTick_AndEndsWithNoStuckUnits(ulong inputSeed)
     {
-        MatchRules rules = TestSim.Rules(income: "1", start: "10");
+        // A rich income so the battle stays crowded whatever the shipped card costs are tuned to.
+        MatchRules rules = TestSim.Rules(income: "1.5", start: "10");
         CommandLog log = ScriptedLog(rules, inputSeed, activeTicks: 120 * 20);
         Assert.True(log.CommandCount > 400, "script should produce plenty of commands");
 
         StructureCatalog Sturdy() => TestSim.Structures(hp: "1000000", keepHp: "1000000", damage: "0");
         var a = TestSim.New(rules, Map, 0xC0FFEE, Sturdy());
-        var b = new Simulation(new MatchSetup(TestSim.Rules(income: "1", start: "10"), MapTestData.LoadTwoLane(),
+        var b = new Simulation(new MatchSetup(TestSim.Rules(income: "1.5", start: "10"), MapTestData.LoadTwoLane(),
             Sturdy(), TestSim.DefaultDeck(rules), TestSim.DefaultDeck(rules)), 0xC0FFEE); // independently built
         Assert.Equal(a.ComputeHash(), b.ComputeHash());
 
@@ -262,8 +263,11 @@ public class DeterminismTests
         SimulationTests.RunFullMatch(rules, 1, log, hashesA);
         SimulationTests.RunFullMatch(rules, 2, log, hashesB);
 
-        Assert.Equal(hashesA.Count, hashesB.Count);
-        for (int i = 0; i < hashesA.Count; i++)
+        // The two matches may end on different ticks (one seed's push may take a Keep), so compare the ticks both
+        // played: every one of them must differ, starting with the hash before the first tick.
+        int shared = Math.Min(hashesA.Count, hashesB.Count);
+        Assert.True(shared > 100, "both matches should run for a while, " + hashesA.Count + " and " + hashesB.Count);
+        for (int i = 0; i < shared; i++)
         {
             Assert.NotEqual(hashesA[i], hashesB[i]);
         }
@@ -489,9 +493,11 @@ public class DeterminismTests
     }
 
     // Re-pinned Sept 2026 for hash format 7 (levels, leader passive and War Cry, capture give-up; the scripted
-    // LeaderAbility commands now act or are counted as ignored).
-    private const ulong PinnedInitialHash = 0x3EEBA7B72A3551E2UL;
-    internal const ulong PinnedFinalHash = 0x3C65BB24DCB37D9AUL;
+    // LeaderAbility commands now act or are counted as ignored), and again for the Sept 2026 tuning session: the
+    // rules, map and structure stats here are fixed, but the deck is the shipped fantasy catalog and its content
+    // hash is part of the state hash, so changing a card's cost or damage moves the pin.
+    private const ulong PinnedInitialHash = 0x86E7F9432DA8DC5AUL;
+    internal const ulong PinnedFinalHash = 0x1772720C366BE8BBUL;
     internal const ulong PinSeed = 12345;
 
     internal static MatchRules PinRules() => MatchRules.FromJson(@"{

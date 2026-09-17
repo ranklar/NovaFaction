@@ -136,3 +136,183 @@ balanced bot against a do-nothing opponent still destroys the Keep in 100% of 20
 No target is met by the bot fixes alone, but the spread of personalities is much tighter (the gap between the best and the
 worst personality fell from 46.4 to 30.4 points) and the economy target moved
 the right way. Everything else needs balance numbers.
+
+## Step 2 — balance numbers
+
+One lever per iteration, measured the same way every time. No bot code changed in any of these; SimVersion stays at
+2. Every iteration's round robin and mirror batch are the same 100 and 200 seeds, so two rows differ only by the
+lever. Every value below is still marked as a placeholder in its content file.
+
+### Iteration 1 — structure damage
+
+Keep damage 90 -> 65, tower damage 80 -> 55 (content/structures.json). The open item said "towers win most fights
+against a trickle of units", and the baseline bore that out: units died on the way in and almost nothing reached a
+structure.
+
+Mirror score per side 430 -> 678, tower-kill rate 0.0% -> 2.0%, overall tower kills 0.2% -> 7.2%. Win rates barely
+moved (turtle 61.9 -> 68.9%): weaker towers help the defender's units survive and push too, so this lever is close to
+neutral between personalities. Nothing was met yet.
+
+### Iteration 2 — structure hp
+
+Keep hp 4000 -> 2600, tower hp 2500 -> 1500.
+
+Tower-kill rate 2.0% -> 13.5% in the mirror and 7.2% -> 24.2% overall; Keep kills still 0.0% in the mirror. Win
+rates again unchanged to within a point, which is useful: structure hp and damage move how decisive a match is
+without moving who wins it.
+
+### Iteration 3 — chest spawn points
+
+content/maps/twolane.json: the four chest spawns moved from (3,11), (14,11), (3,20), (14,20) - one row behind each
+player's own front line - into the two river lane gaps, at (2,14), (15,14), (2,17), (15,17). They stay
+180-degree symmetric, two on each player's side of the center line, and now sit outside both deploy zones, so a chest
+can only be taken by sending a unit forward.
+
+This is the change that turned the economy around. **Before it the turtle collected 2.4 times as much chest gold as
+an active bot** (4.46 against 1.89 per match): the chests were in everybody's back yard, and the turtle's defenders
+walked over its own while the attacker's units marched the other way. After it the ratio is 1.39 the other way.
+Map-gold ratio (active over turtle) 1.08 -> 1.52, overall income ratio 1.017 -> 1.060, turtle 69.0 -> 64.2%.
+The cost is that chests in the river are contested, so far fewer are collected: 4.96 -> 2.04 per side.
+
+### Iteration 4 — mine income and chest gold
+
+mineIncomePerSecond 0.05 -> 0.09, mineIncomeCap 0.1 -> 0.18, chestGold 0.75 -> 2.5 (rulesVersion 1 -> 2).
+With the chests moved, the map-gold pool was worth having; this made it worth fighting for.
+
+The biggest single step of the session. **Turtle 64.2% -> 43.8%** (target met), income ratio 1.060 -> 1.156,
+Keep kills 0.0% -> 13.5% and tower kills 16.0% -> 63.5% in the mirror, all from the extra gold buying more units.
+The asymmetry rose on its own too (map-gold ratio 1.52 -> 1.77): more gold means more units means more forward
+presence means more map control, which is the loop the design intends.
+
+### Iteration 5 — card outliers
+
+goblin_pack cost 3 -> 4 and catapult damage 250 -> 110 (content/factions/fantasy/units.json), the two cards the
+efficiency table flagged.
+
+- goblin_pack was 2.12x the median card on structure damage per gold and 1.66x on kills per gold: four units with
+  240 damage per second between them for 3 gold is 80 damage per second per gold, against a knight's 29. At 4 gold
+  it lands at 1.28x and 1.26x.
+- catapult was 5.4x the median on structure damage per gold. One 250-damage shot is worth about ten times what a
+  knight achieves for the same gold. At 110 damage it sits at 1.49x.
+
+Aggressive 39.0 -> 41.8% and turtle stayed at 44.6%, so **the whole win-rate target was met here**. Keep kills fell
+to 9.0% and tower kills to 57.5%, because the nerfs took real damage out of the game.
+
+### Iteration 6 — base income rate
+
+goldBaseIncomePerSecond 0.35 -> 0.2 (rulesVersion 2 -> 3). This was taken earlier than the suggested order for a
+reason worth recording: **the income target is arithmetically unreachable while base income is 0.35/s**, whatever
+the map gold is worth. With base income B and map gold A for an active player and T for a turtle, the target
+(B + A) / (B + T) >= 1.25 needs T <= 0.4 B at the measured asymmetry of A = 1.9 T. At B = 63 that means the turtle
+must earn more than 25 gold from the map and the active player nearly 50, which no setting of the eight map-gold
+values produces. Base income is the denominator the target is fighting.
+
+Income ratio 1.167 -> 1.220 and **every card fell below the 2x outlier limit** (the catapult to 1.70x), because a
+smaller economy means fewer deploys and less spread between cards. Keep kills fell to 6.5% with the smaller economy.
+
+### Iteration 7 — structure hp and damage again
+
+Keep 2600 -> 1700 hp and 65 -> 55 damage, tower 1500 -> 1000 hp and 55 -> 48 damage. The smaller economy of
+iteration 6 had taken the Keep-kill rate down to 6.5%, so the structures had to come down with it.
+
+**Keep kills 6.5% -> 24.0% and tower kills 63.5% -> 85.0%**, both in target. Turtle drifted back up to 48.4% and
+income fell to 1.176, because matches now end early and less map gold accrues.
+
+### Iteration 8 — chest gold
+
+chestGold 2.5 -> 6.5 first (rulesVersion 3 -> 4), then swept down the same lever because 6.5 overshot badly. Chests
+are the most asymmetric income in the game (active bots take 2.1-2.9 times the turtle's chest gold, against 1.4-1.5
+for mines), so chest gold is the strongest lever on the income ratio - but it is also gold, so it drives the
+Keep-kill rate at the same time. The sweep, all other values fixed:
+
+| chestGold | income ratio | mirror Keep kills | turtle win | spread (worst-best) |
+| --- | --- | --- | --- | --- |
+| 2.5 (iteration 7) | 1.176 | 24.0% | 48.4% | 39.9 - 58.1% |
+| **3.0 (kept)** | **1.204** | **34.0%** | **42.2%** | **42.2 - 54.8%** |
+| 3.5 | 1.203 | 37.0% | 41.2% | 41.2 - 54.2% |
+| 4.5 | 1.239 | 45.0% | 41.0% | 41.0 - 55.0% |
+| 6.5 | 1.299 | 57.0% | 36.5% | 36.5 - 57.9% |
+
+chestGold 3 is the only value in the sweep that keeps the Keep-kill rate inside 20-35%. Nothing on this lever
+reaches the income target without pushing Keep kills far out of band: at 6.5 the income target is met (1.299) and
+the Keep-kill rate is 57% with the turtle down at 36.5%. The two targets pull against each other on this lever, and
+holding five of them beat holding one.
+
+## Final state
+
+Every number changed this session, and what it was before:
+
+| file | value | was | now |
+| --- | --- | --- | --- |
+| content/structures.json | Keep hp | 4000 | **1700** |
+| content/structures.json | Keep damage | 90 | **55** |
+| content/structures.json | tower hp | 2500 | **1000** |
+| content/structures.json | tower damage | 80 | **48** |
+| content/rules.json | goldBaseIncomePerSecond | 0.35 | **0.2** |
+| content/rules.json | mineIncomePerSecond | 0.05 | **0.09** |
+| content/rules.json | mineIncomeCap | 0.1 | **0.18** |
+| content/rules.json | chestGold | 0.75 | **3** |
+| content/rules.json | rulesVersion | 1 | **4** |
+| content/maps/twolane.json | chest spawns | (3,11) (14,11) (3,20) (14,20) | **(2,14) (15,14) (2,17) (15,17)** |
+| content/factions/fantasy/units.json | goblin_pack cost | 3 | **4** |
+| content/factions/fantasy/units.json | catapult damage | 250 | **110** |
+
+Unchanged: every structure's range, attack interval, projectile speed and destruction bonus; every other rules value
+(gold cap, starting gold, spawn delay, hand and deck size, separation, aggro, crowd penalty, mine capture radius and
+seconds, give-up and retry times, chest spawn timing and collect radius, level values); every other unit and spell
+number; every bot personality file; the map's terrain, structures, deploy zones and mine positions.
+
+Round robin, 100 matches per ordered pairing (1600 matches), baseline against final:
+
+| bot | baseline | after bot fixes | final | gold/match (baseline -> final) |
+| --- | --- | --- | --- | --- |
+| swarm | 48.9% | 51.7% | **54.8%** | 74.1 -> 50.4 |
+| aggressive | 23.2% | 31.5% | **51.6%** | 73.1 -> 49.6 |
+| balanced | 58.2% | 54.9% | **51.4%** | 74.3 -> 50.5 |
+| turtle | 69.6% | 61.9% | **42.2%** | 74.3 -> 48.5 |
+
+Balanced mirror, 200 matches, baseline against final:
+
+| stat | baseline | final | target |
+| --- | --- | --- | --- |
+| Keep-kill rate | 0.0% | **34.0%** | 20-35% |
+| tower-kill rate | 0.5% | **87.5%** | 60%+ |
+| sudden death | 6.0% | **1.0%** | under 10% |
+| match length | 180.2 s | 165.1 s | - |
+| gold per side | 74.4 | 51.8 | - |
+| worst card ratio | 10.88x (catapult) | **1.49x (catapult)** | under 2x |
+
+Targets met: **five of six**.
+
+| target | result | met |
+| --- | --- | --- |
+| turtle at or below 45% | 42.2% | yes |
+| nobody above 60% or below 40% | 42.2% to 54.8% | yes |
+| active-versus-turtle income 1.25-1.40 | 1.204 | **no** |
+| Keep-kill rate 20-35% in mirrors | 34.0% | yes |
+| a forward tower down in 60%+ of mirrors | 87.5% | yes |
+| sudden death under 10% | 1.0% | yes |
+| no card above 2x the median | 1.49x worst | yes |
+
+The income ratio is the one miss, at 1.204 against a floor of 1.25. It is not a matter of one more nudge: the
+arithmetic in iteration 6 and the sweep in iteration 8 both say the same thing, that the ratio and the Keep-kill
+rate are driven by the same gold and pull against each other. Every pairing an aggressive or swarm bot plays
+against the turtle is already inside the band (1.33, 1.26, 1.23); it is the balanced bot's pairings (1.20, 1.07)
+that pull the mean down, because the balanced personality is not much more active than the turtle at holding the
+map.
+
+### What to try next
+
+1. Raise chest gold to about 4.5 (income ratio 1.239) and put roughly 20% back onto the structures to hold the
+   Keep-kill rate in band. That is the two-lever move iteration 8 could not make on its own, and it is the most
+   likely way to land all six.
+2. Give the balanced personality more appetite for the map (its mineFocus is 0.4 against swarm's 0.7). Personality
+   files were out of scope this session; they are the obvious next lever for the income ratio, since the mean is
+   dragged down by balanced's pairings alone.
+3. Teach the bot to value cards by what they will actually do. Every non-tank card scores the same attack utility,
+   so the card it pushes with comes down to hand slot order and cost, and it has no model of tower fire, so it
+   cannot tell a card that will reach a structure from one that dies on the way. This is the largest remaining
+   source of noise in every per-card number in this log.
+4. The catapult is still nearly a dead card (660 gold spent per 200 matches against the knight's 3764). Its damage
+   was cut to fix an efficiency outlier that rested on very few deploys; with a bot that valued cards properly it
+   might deserve some of that back.

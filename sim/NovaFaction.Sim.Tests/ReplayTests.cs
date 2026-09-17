@@ -202,8 +202,10 @@ public class ReplayTests
 
         ReplayVerification check = read.Verify(content);
 
+        // Playing a different card changes the match: either the final hash no longer matches, or the match now ends
+        // on a different tick. Both are the tampering being caught.
         Assert.False(check.Success);
-        Assert.Contains("hash", check.Message);
+        Assert.True(check.Message.Contains("hash") || check.Message.Contains("tick"), check.Message);
         Assert.StartsWith("FAILED", check.ToString());
     }
 
@@ -291,9 +293,8 @@ public class ReplayTests
         ContentLibrary content = ShippedContent();
         byte[] bytes = ReplayWriter.Write(Replay.FromMatch(BotMatch(content, 1).Simulation));
 
-        // Tougher towers: same rules, map and cards, different structures.json.
-        ContentLibrary otherStructures = ShippedContent(structures: StructureCatalog.FromJson(
-            TestSim.StructuresJson().Replace("\"hp\": 2500", "\"hp\": 2600")));
+        // Different structures.json: same rules, map and cards, but stats that content tuning will never produce.
+        ContentLibrary otherStructures = ShippedContent(structures: TestSim.Structures(hp: "12345", keepHp: "23456"));
         var ex = Assert.Throws<ReplayException>(() => ReplayReader.Read(bytes, otherStructures));
         Assert.StartsWith("Content version mismatch: the replay was recorded with content 0x", ex.Message);
 
@@ -316,9 +317,11 @@ public class ReplayTests
         Replay replay = Replay.FromMatch(BotMatch(content, 1).Simulation);
         byte[] bytes = ReplayWriter.Write(replay);
 
+        int version = content.Rules.RulesVersion;
         MatchRules rules2 = MatchRules.FromJson(File.ReadAllText(MatchRulesTests.ContentPath("rules.json"))
-            .Replace("\"rulesVersion\": 1", "\"rulesVersion\": 2"));
-        Assert.Equal("The replay was recorded with rules version 1 but the loaded rules.json is version 2.",
+            .Replace("\"rulesVersion\": " + version, "\"rulesVersion\": " + (version + 1)));
+        Assert.Equal("The replay was recorded with rules version " + version + " but the loaded rules.json is version "
+            + (version + 1) + ".",
             Assert.Throws<ReplayException>(() => ReplayReader.Read(bytes, ShippedContent(rules: rules2))).Message);
 
         var noSwarm = ShippedContent(bots: BotTests.ShippedBots.Where(b => b != "swarm").Select(BotTests.LoadBot));

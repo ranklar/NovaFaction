@@ -105,7 +105,8 @@ public class LevelsAndLeadersTests
     [Fact]
     public void StructureLevel_ScalesTowersAndKeep_OfThatPlayerOnly()
     {
-        StructureCatalog stats = TestSim.LoadStructures();
+        // Fixed inline stats (Keep 4000, tower 2500), so tuning content/structures.json does not move the numbers.
+        StructureCatalog stats = TestSim.Structures();
         Simulation sim = Sim(structureLevel0: 3, structures: stats);
         Fix factor = sim.Rules.LevelFactor(3);
         foreach (StructureState s in sim.State.Structures)

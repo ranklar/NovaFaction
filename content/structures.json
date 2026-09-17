@@ -3,8 +3,8 @@
   "structures": [
     {
       "kind": "keep",
-      "hp": 4000,
-      "damage": 90,
+      "hp": 1700,
+      "damage": 55,
       "attackIntervalSeconds": 1,
       "range": 6,
       "targets": "both",
@@ -14,8 +14,8 @@
     },
     {
       "kind": "tower",
-      "hp": 2500,
-      "damage": 80,
+      "hp": 1000,
+      "damage": 48,
       "attackIntervalSeconds": 0.8,
       "range": 7,
       "targets": "both",

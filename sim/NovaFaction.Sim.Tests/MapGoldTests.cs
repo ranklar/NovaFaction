@@ -17,7 +17,8 @@ public class MapGoldTests
 {
     // twolane markers (cell = world units; centers at +0.5).
     // Mine 0 at cell (5, 15), player 0's side of the river; mine 1 at (12, 16), player 1's side.
-    // Chests (bottom row first): 0 (3, 11), 1 (14, 11), 2 (3, 20), 3 (14, 20).
+    // Chests (bottom row first): 0 (2, 14), 1 (15, 14), 2 (2, 17), 3 (15, 17) - in the river lanes, two on each
+    // player's side of the center line.
     private const int MineWest = 0, MineEast = 1;
 
     private static void Step(Simulation sim) => sim.Tick(Array.Empty<Command>());
@@ -49,7 +50,7 @@ public class MapGoldTests
     {
         Simulation sim = GoldSim();
         Assert.Equal(new[] { new CellCoord(5, 15), new CellCoord(12, 16) }, sim.State.Mines.Select(m => m.Cell));
-        Assert.Equal(new[] { new CellCoord(3, 11), new CellCoord(14, 11), new CellCoord(3, 20), new CellCoord(14, 20) },
+        Assert.Equal(new[] { new CellCoord(2, 14), new CellCoord(15, 14), new CellCoord(2, 17), new CellCoord(15, 17) },
             sim.State.Chests.Select(c => c.Cell));
         Assert.All(sim.State.Mines, m =>
         {
@@ -418,10 +419,10 @@ public class MapGoldTests
     {
         MatchRules rules = GoldRules(chestFirst: "0", chestInterval: "100");
         Simulation sim = GoldSim(rules);
-        ChestState chest = sim.State.Chests[1]; // (14, 11), player 0's east lane
+        ChestState chest = sim.State.Chests[1]; // (15, 14), player 0's side of the east lane
         // A knight of player 1 walking down the east lane: it collects the chest on the first tick it is within
-        // the radius, measured after it has moved that tick.
-        Unit walker = sim.State.AddUnit(1, Card(sim, "knight"), chest.Position + TestSim.V("0", "4"));
+        // the radius, measured after it has moved that tick. It starts below chest 3 so that is not taken on the way.
+        Unit walker = sim.State.AddUnit(1, Card(sim, "knight"), chest.Position + TestSim.V("0", "2"));
         int ticks = 0;
         while (chest.IsPresent)
         {

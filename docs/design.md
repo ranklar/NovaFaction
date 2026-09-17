@@ -77,6 +77,20 @@ Themed factions released over time as content packs; fantasy faction first.
 - sim/: netstandard2.1 C# library. Deterministic: fixed-point math, seeded RNG, fixed 20 ticks/s,
   flow-field pathfinding on a grid. Headless bot-vs-bot harness; per-tick state hash for
   cross-platform determinism checks. No Unity references.
+- Sim numerics (sim/NovaFaction.Sim):
+  - Fix = Q48.16 fixed point (long raw, 1.0 = 65536). + - * / saturate at MaxValue/MinValue
+    instead of wrapping; * and / use exact 128-bit intermediates and round to nearest, ties away
+    from zero (symmetric for negatives). Divide by zero throws. Round() is also ties-away-from-zero.
+  - Balance data is written as plain decimals ("1.5", "-0.25"; no exponent, no leading '+',
+    no ".5" / "5.") and parsed with integer math, rounded to the nearest 1/65536.
+    Fix.ToString() gives the shortest decimal that parses back to the same value.
+  - Fix.ToFloat() is view-only for the client. A reflection test fails the build if any other
+    sim member uses float or double.
+  - FixVector2.Length/Normalized use exact 128-bit sums of squares, so they stay accurate for tiny
+    and huge vectors; LengthSquared/Dot saturate beyond about +/-8,000,000 per component.
+  - SimRandom = PCG32 (XSH-RR, reference stream 54), state is a single ulong (GetState/SetState)
+    for state hashes and replays. NextInt is unbiased (rejection sampling). Chance always consumes
+    exactly one draw. Changing the algorithm breaks saved replays; a test pins reference output.
 - server/: ASP.NET Core (C#). Accounts, economy, matchmaking, input relay, match verification by
   re-running the sim. PostgreSQL. Runs on the Windows desktop for LAN testing; cloud container later.
 - content/: JSON data for units, factions, maps, missions. Art in Addressables bundles per theme.

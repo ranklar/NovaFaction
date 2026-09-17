@@ -238,13 +238,28 @@ namespace NovaFaction.Harness
 
         private static void PrintCards(IEnumerable<CardRow> cards) =>
             Fmt.Table(["side", "bot", "card", "deploys", "per match", "gold", "kills", "deaths", "struct dmg", "dmg/gold",
-                    "kills/deploy"],
+                    "kills/deploy", "kills/gold"],
                 cards.Select(c => (IReadOnlyList<string>)
                 [
                     "P" + c.Side, c.Personality, c.Card, Output.I(c.Deploys), Fmt.N(c.DeploysPerMatch), Output.I(c.GoldSpent),
                     Output.I(c.Kills), Output.I(c.Deaths), Fmt.N(c.StructureDamage, 0), Fmt.N(c.StructureDamagePerGold, 1),
-                    Fmt.N(c.KillsPerDeploy),
+                    Fmt.N(c.KillsPerDeploy), Fmt.N(c.KillsPerGold, 3),
                 ]));
+
+        /// <summary>The card outlier check: each card against the median card, both sides pooled.</summary>
+        private static void PrintEfficiency(BatchSummary s)
+        {
+            Console.WriteLine("Card efficiency vs the median card (both sides pooled; target: no ratio above "
+                + Fmt.N(CardEfficiency.Limit, 1) + "):");
+            Console.WriteLine("  median dmg/gold " + Fmt.N(s.MedianStructureDamagePerGold, 1)
+                + ", median kills/gold " + Fmt.N(s.MedianKillsPerGold, 3));
+            Fmt.Table(["card", "gold", "dmg/gold", "x median", "kills/gold", "x median", "outlier"],
+                s.CardEfficiencies.Select(c => (IReadOnlyList<string>)
+                [
+                    c.Card, Output.I(c.GoldSpent), Fmt.N(c.StructureDamagePerGold, 1), Fmt.N(c.DamageRatio),
+                    Fmt.N(c.KillsPerGold, 3), Fmt.N(c.KillRatio), c.IsOutlier ? "OUTLIER" : "",
+                ]));
+        }
 
         // ------------------------------------------------------------ batch
 
@@ -270,7 +285,9 @@ namespace NovaFaction.Harness
             {
                 Console.WriteLine("Tie-break rules:   " + string.Join(", ", s.TieBreakRules.Select(kv => kv.Key + " " + kv.Value)));
             }
-            Console.WriteLine("Keep-kill rate:    " + Fmt.Pct(s.KeepKillRate));
+            Console.WriteLine("Keep-kill rate:    " + Fmt.Pct(s.KeepKillRate) + "   (target 20-35% in balanced mirrors)");
+            Console.WriteLine("Tower-kill rate:   " + Fmt.Pct(s.TowerKillRate) + "   (matches with 1+ forward tower down; target 60%+)");
+            Console.WriteLine("Sudden death:      " + Fmt.Pct(s.SuddenDeathRate) + "   (target under 10%)");
             Console.WriteLine("Match length (s):  " + s.LengthSeconds);
             Console.WriteLine("Score margin P0-P1:" + " " + s.ScoreMargin);
             Console.WriteLine("|Score margin|:    " + s.AbsScoreMargin);
@@ -286,6 +303,8 @@ namespace NovaFaction.Harness
             Console.WriteLine();
             Console.WriteLine("Per card (totals over all matches):");
             PrintCards(s.Cards);
+            Console.WriteLine();
+            PrintEfficiency(s);
             Console.WriteLine();
 
             string stem = Path.Combine(outDir, "batch_" + Output.Safe(plan.P0) + "_vs_" + Output.Safe(plan.P1) + "_"
@@ -334,12 +353,14 @@ namespace NovaFaction.Harness
             Console.WriteLine();
             string[] headers =
             [
-                "p0", "p1", "p0 win", "p1 win", "keep kill", "length s", "margin", "|margin|", "p0 score", "p1 score",
-                "p0 gold", "p1 gold", "income p0/p1", "p0 mines", "p1 mines", "p0 chests", "p1 chests", "end reasons",
+                "p0", "p1", "p0 win", "p1 win", "keep kill", "tower kill", "sudden", "length s", "margin", "|margin|",
+                "p0 score", "p1 score", "p0 gold", "p1 gold", "income p0/p1", "p0 mines", "p1 mines", "p0 chests",
+                "p1 chests", "end reasons",
             ];
             IReadOnlyList<string> Row(BatchSummary s) =>
             [
                 s.P0, s.P1, Fmt.Pct(s.Sides[0].WinRate), Fmt.Pct(s.Sides[1].WinRate), Fmt.Pct(s.KeepKillRate),
+                Fmt.Pct(s.TowerKillRate), Fmt.Pct(s.SuddenDeathRate),
                 Fmt.N(s.LengthSeconds.Mean, 1), Fmt.N(s.ScoreMargin.Mean, 0), Fmt.N(s.AbsScoreMargin.Mean, 0),
                 Fmt.N(s.Sides[0].Score, 0), Fmt.N(s.Sides[1].Score, 0), Fmt.N(s.Sides[0].GoldTotal, 1),
                 Fmt.N(s.Sides[1].GoldTotal, 1), Fmt.N(s.IncomeRatioP0OverP1, 3), Fmt.N(s.Sides[0].MineCaptures),
@@ -370,6 +391,21 @@ namespace NovaFaction.Harness
             }).OrderByDescending(o => o.WinRate).ToArray();
             Fmt.Table(["bot", "played", "win rate", "gold/match"],
                 overall.Select(o => (IReadOnlyList<string>)[o.Bot, Output.I(o.Played), Fmt.Pct(o.WinRate), Fmt.N(o.MeanGold, 1)]));
+            Console.WriteLine();
+            var incomes = summaries.Where(x => x.ActiveVsTurtleRatio != null)
+                .Select(x => new { Pairing = x.P0 + " vs " + x.P1, Label = x.ActiveVsTurtle!, Ratio = x.ActiveVsTurtleRatio!.Value })
+                .ToArray();
+            if (incomes.Length > 0)
+            {
+                Console.WriteLine("Active vs turtle income (target 1.25-1.40):");
+                Fmt.Table(["pairing", "ratio", "ratio"],
+                    incomes.Select(i => (IReadOnlyList<string>)[i.Pairing, i.Label, Fmt.N(i.Ratio, 3)]));
+                Console.WriteLine("  mean over the pairings above: " + Fmt.N(incomes.Average(i => i.Ratio), 3));
+                Console.WriteLine();
+            }
+            Console.WriteLine("Overall rates: keep kill " + Fmt.Pct(summaries.Sum(x => x.KeepKillRate * x.Matches) / (pairs.Length * (double)n))
+                + ", tower kill " + Fmt.Pct(summaries.Sum(x => x.TowerKillRate * x.Matches) / (pairs.Length * (double)n))
+                + ", sudden death " + Fmt.Pct(summaries.Sum(x => x.SuddenDeathRate * x.Matches) / (pairs.Length * (double)n)));
             Console.WriteLine();
 
             string stem = Path.Combine(outDir, "roundrobin_" + Output.Safe(map) + "_n" + n + "_s" + seedStart);

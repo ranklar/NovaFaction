@@ -26,20 +26,34 @@ internal sealed record SideSummary(
     int Side, string Personality, int Wins, double WinRate,
     double GoldBase, double GoldMine, double GoldChest, double GoldTotal, double GoldSpent,
     double IncomeVsBaseOnly, double MineCaptures, double ChestsCollected,
-    double Deploys, double Spells, double Abilities, double UnitsLost, double StructuresDestroyed, double Score);
+    double Deploys, double Spells, double Abilities, double UnitsLost, double StructuresDestroyed,
+    double TowersDestroyed, double Score);
 
 internal sealed record CardRow(
     int Side, string Personality, string Card, int Deploys, double DeploysPerMatch, int GoldSpent, int Kills, int Deaths,
-    double StructureDamage, double StructureDamagePerGold, double KillsPerDeploy);
+    double StructureDamage, double StructureDamagePerGold, double KillsPerDeploy, double KillsPerGold);
+
+/// <summary>
+/// The per-card efficiency check: structure damage per gold and kills per gold for every card, both sides pooled,
+/// against the median card. The balance target is that no card is more than <see cref="Limit"/> times the median.
+/// </summary>
+internal sealed record CardEfficiency(string Card, int GoldSpent, double StructureDamagePerGold, double KillsPerGold,
+    double DamageRatio, double KillRatio)
+{
+    public const double Limit = 2.0;
+
+    public bool IsOutlier => DamageRatio > Limit || KillRatio > Limit;
+}
 
 /// <summary>Everything the batch command reports about N matches of one pairing.</summary>
 internal sealed record BatchSummary(
     string P0, string P1, string Map, int Matches, ulong SeedStart,
     SideSummary[] Sides,
     Dictionary<string, int> EndReasons, Dictionary<string, int> TieBreakRules,
-    double KeepKillRate, Spread LengthSeconds, Spread ScoreMargin, Spread AbsScoreMargin,
+    double KeepKillRate, double TowerKillRate, double SuddenDeathRate,
+    Spread LengthSeconds, Spread ScoreMargin, Spread AbsScoreMargin,
     double IncomeRatioP0OverP1, string? ActiveVsTurtle, double? ActiveVsTurtleRatio,
-    CardRow[] Cards)
+    CardRow[] Cards, double MedianStructureDamagePerGold, double MedianKillsPerGold, CardEfficiency[] CardEfficiencies)
 {
     public static BatchSummary Build(IReadOnlyList<MatchRecord> records, string p0, string p1, string map, ulong seedStart)
     {
@@ -56,7 +70,7 @@ internal sealed record BatchSummary(
                 goldBase > 0 ? Mean(s => s.GoldTotal) / goldBase : 0,
                 Mean(s => s.MineCaptures), Mean(s => s.ChestsCollected), Mean(s => s.Deploys), Mean(s => s.Spells),
                 Mean(s => s.Abilities), Mean(s => s.UnitsLost), Mean(s => s.StructuresDestroyed),
-                records.Average(r => side == 0 ? r.Score0 : r.Score1));
+                Mean(s => s.TowersDestroyed), records.Average(r => side == 0 ? r.Score0 : r.Score1));
         }
 
         string? activeVsTurtle = null;
@@ -84,18 +98,65 @@ internal sealed record BatchSummary(
         CardRow[] cards = cardTotals.Select(kv => new CardRow(kv.Key.Item1, kv.Key.Item1 == 0 ? p0 : p1, kv.Key.Item2,
             kv.Value.Deploys, (double)kv.Value.Deploys / n, kv.Value.GoldSpent, kv.Value.Kills, kv.Value.Deaths,
             kv.Value.StructureDamage, kv.Value.GoldSpent > 0 ? kv.Value.StructureDamage / kv.Value.GoldSpent : 0,
-            kv.Value.Deploys > 0 ? (double)kv.Value.Kills / kv.Value.Deploys : 0)).ToArray();
+            kv.Value.Deploys > 0 ? (double)kv.Value.Kills / kv.Value.Deploys : 0,
+            kv.Value.GoldSpent > 0 ? (double)kv.Value.Kills / kv.Value.GoldSpent : 0)).ToArray();
+        var (medianDamage, medianKills, efficiencies) = Efficiency(cardTotals);
 
         return new BatchSummary(p0, p1, map, n, seedStart, sides,
             Count(records.Select(r => r.EndReason)),
             Count(records.Where(r => r.EndReason == "TieBreak").Select(r => r.TieBreakRule)),
             (double)records.Count(r => r.KeepKill) / n,
+            (double)records.Count(r => r.TowerKills > 0) / n,
+            (double)records.Count(r => r.SuddenDeath) / n,
             Spread.Of(records.Select(r => r.Seconds).ToArray()),
             Spread.Of(records.Select(r => r.Margin).ToArray()),
             Spread.Of(records.Select(r => Math.Abs(r.Margin)).ToArray()),
             sides[1].GoldTotal > 0 ? sides[0].GoldTotal / sides[1].GoldTotal : 0,
-            activeVsTurtle, activeRatio, cards);
+            activeVsTurtle, activeRatio, cards, medianDamage, medianKills, efficiencies);
     }
+
+    /// <summary>
+    /// Pools every played card over both sides (structures and leader abilities are not cards, so they are left out)
+    /// and compares each one's structure damage per gold and kills per gold with the median card's.
+    /// </summary>
+    private static (double MedianDamage, double MedianKills, CardEfficiency[] Cards)
+        Efficiency(IEnumerable<KeyValuePair<(int, string), CardStats>> totals)
+    {
+        var pooled = new SortedDictionary<string, CardStats>(StringComparer.Ordinal);
+        foreach (var (key, stats) in totals)
+        {
+            string card = key.Item2;
+            if (card.StartsWith('[') || card.EndsWith("(ability)"))
+            {
+                continue; // structures and leader abilities are not cards the player pays gold for
+            }
+            if (!pooled.TryGetValue(card, out CardStats? total))
+            {
+                pooled[card] = total = new CardStats();
+            }
+            total.Add(stats);
+        }
+        var played = pooled.Where(kv => kv.Value.GoldSpent > 0).ToArray();
+        if (played.Length == 0)
+        {
+            return (0, 0, []);
+        }
+        double[] damage = played.Select(kv => kv.Value.StructureDamage / kv.Value.GoldSpent).OrderBy(v => v).ToArray();
+        double[] kills = played.Select(kv => (double)kv.Value.Kills / kv.Value.GoldSpent).OrderBy(v => v).ToArray();
+        double medianDamage = Median(damage);
+        double medianKills = Median(kills);
+        CardEfficiency[] cards = played.Select(kv =>
+        {
+            double d = kv.Value.StructureDamage / kv.Value.GoldSpent;
+            double k = (double)kv.Value.Kills / kv.Value.GoldSpent;
+            return new CardEfficiency(kv.Key, kv.Value.GoldSpent, d, k,
+                medianDamage > 0 ? d / medianDamage : 0, medianKills > 0 ? k / medianKills : 0);
+        }).OrderByDescending(c => Math.Max(c.DamageRatio, c.KillRatio)).ToArray();
+        return (medianDamage, medianKills, cards);
+    }
+
+    private static double Median(double[] sorted) =>
+        sorted.Length % 2 == 1 ? sorted[sorted.Length / 2] : (sorted[sorted.Length / 2 - 1] + sorted[sorted.Length / 2]) / 2;
 
     private static Dictionary<string, int> Count(IEnumerable<string> items) =>
         items.GroupBy(i => i).OrderBy(g => g.Key, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count());
@@ -168,33 +229,34 @@ internal static class Output
         string[] headers =
         [
             "seed", "p0", "p1", "map", "winner", "endReason", "tieBreakRule", "ticks", "seconds", "score0", "score1", "margin",
-            "keepKill", "finalHash",
+            "keepKill", "suddenDeath", "towerKills", "finalHash",
             "p0GoldBase", "p0GoldMine", "p0GoldChest", "p0GoldSpent", "p0MineCaptures", "p0Chests", "p0Deploys", "p0Spells",
-            "p0Abilities", "p0UnitsLost", "p0StructuresDestroyed",
+            "p0Abilities", "p0UnitsLost", "p0StructuresDestroyed", "p0TowersDestroyed",
             "p1GoldBase", "p1GoldMine", "p1GoldChest", "p1GoldSpent", "p1MineCaptures", "p1Chests", "p1Deploys", "p1Spells",
-            "p1Abilities", "p1UnitsLost", "p1StructuresDestroyed",
+            "p1Abilities", "p1UnitsLost", "p1StructuresDestroyed", "p1TowersDestroyed",
         ];
         return Csv(headers, records.Select(r => (IReadOnlyList<string>)new[]
         {
             r.Seed.ToString(CultureInfo.InvariantCulture), r.P0, r.P1, r.Map, r.Winner.ToString(CultureInfo.InvariantCulture),
             r.EndReason, r.TieBreakRule, r.Ticks.ToString(CultureInfo.InvariantCulture), Fmt.N(r.Seconds), Fmt.N(r.Score0),
-            Fmt.N(r.Score1), Fmt.N(r.Margin), r.KeepKill ? "1" : "0", r.FinalHash,
+            Fmt.N(r.Score1), Fmt.N(r.Margin), r.KeepKill ? "1" : "0", r.SuddenDeath ? "1" : "0",
+            I(r.TowerKills), r.FinalHash,
         }.Concat(r.Players.SelectMany(PlayerCells)).ToArray()));
     }
 
     private static string[] PlayerCells(PlayerStats p) =>
     [
         Fmt.N(p.GoldBase), Fmt.N(p.GoldMine), Fmt.N(p.GoldChest), Fmt.N(p.GoldSpent), I(p.MineCaptures), I(p.ChestsCollected),
-        I(p.Deploys), I(p.Spells), I(p.Abilities), I(p.UnitsLost), I(p.StructuresDestroyed),
+        I(p.Deploys), I(p.Spells), I(p.Abilities), I(p.UnitsLost), I(p.StructuresDestroyed), I(p.TowersDestroyed),
     ];
 
     public static string CardsCsv(IEnumerable<CardRow> cards) => Csv(
         ["side", "personality", "card", "deploys", "deploysPerMatch", "goldSpent", "kills", "deaths", "structureDamage",
-            "structureDamagePerGold", "killsPerDeploy"],
+            "structureDamagePerGold", "killsPerDeploy", "killsPerGold"],
         cards.Select(c => (IReadOnlyList<string>)
         [
             I(c.Side), c.Personality, c.Card, I(c.Deploys), Fmt.N(c.DeploysPerMatch), I(c.GoldSpent), I(c.Kills), I(c.Deaths),
-            Fmt.N(c.StructureDamage), Fmt.N(c.StructureDamagePerGold), Fmt.N(c.KillsPerDeploy),
+            Fmt.N(c.StructureDamage), Fmt.N(c.StructureDamagePerGold), Fmt.N(c.KillsPerDeploy), Fmt.N(c.KillsPerGold, 3),
         ]));
 
     public static string I(int value) => value.ToString(CultureInfo.InvariantCulture);
@@ -206,7 +268,7 @@ internal static class Output
     public static object MatchJson(MatchRecord r) => new
     {
         r.Seed, r.P0, r.P1, r.Map, r.Winner, r.EndReason, r.TieBreakRule, r.Ticks, r.Seconds, r.Score0, r.Score1, r.Margin,
-        r.KeepKill, r.FinalHash, r.Players,
+        r.KeepKill, r.SuddenDeath, r.TowerKills, r.FinalHash, r.Players,
         Cards = r.Cards.OrderBy(kv => kv.Key.Player).ThenBy(kv => kv.Key.Card, StringComparer.Ordinal)
             .Select(kv => new { Side = kv.Key.Player, kv.Key.Card, kv.Value.Deploys, kv.Value.GoldSpent, kv.Value.Kills,
                 kv.Value.Deaths, kv.Value.StructureDamage }),

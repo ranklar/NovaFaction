@@ -79,6 +79,7 @@ internal sealed class PlayerStats
     public int ChestsCollected { get; set; }
     public int UnitsLost { get; set; }
     public int StructuresDestroyed { get; set; }
+    public int TowersDestroyed { get; set; }
     public int Deploys { get; set; }
     public int Spells { get; set; }
     public int Abilities { get; set; }
@@ -93,6 +94,10 @@ internal sealed class MatchRecord
     public required string P0 { get; init; }
     public required string P1 { get; init; }
     public required string Map { get; init; }
+
+    /// <summary>Ticks of regulation time; a match that ran longer went to sudden death.</summary>
+    public required int RegulationTicks { get; init; }
+
     public int Winner { get; set; }
     public string EndReason { get; set; } = "";
     public string TieBreakRule { get; set; } = "";
@@ -102,6 +107,12 @@ internal sealed class MatchRecord
     public double Score1 { get; set; }
     public double Margin => Score0 - Score1;
     public bool KeepKill => EndReason == nameof(Sim.Combat.EndReason.KeepDestroyed);
+
+    /// <summary>The match went past regulation into sudden death.</summary>
+    public bool SuddenDeath => Ticks > RegulationTicks;
+
+    /// <summary>Forward towers destroyed in this match, by either side.</summary>
+    public int TowerKills => Players[0].TowersDestroyed + Players[1].TowersDestroyed;
     public string FinalHash { get; set; } = "";
     public PlayerStats[] Players { get; } = [new PlayerStats(), new PlayerStats()];
 
@@ -197,6 +208,10 @@ internal sealed class StatsObserver(MatchRecord record, int ticksPerSecond, bool
     public void OnStructureDestroyed(in StructureDestroyedEvent e)
     {
         record.Players[e.Source.Player].StructuresDestroyed++;
+        if (e.Kind == "tower")
+        {
+            record.Players[e.Source.Player].TowersDestroyed++;
+        }
         Note(e.Tick, Who(e.Source.Player) + " DESTROYS P" + e.Owner + "'s " + e.Kind + " #" + e.StructureIndex
             + " (" + CardKey(e.Source) + ", +" + e.DestructionBonus + " score)");
     }
@@ -250,7 +265,11 @@ internal static class MatchRunner
     public static (MatchRecord Record, Simulation Sim) Run(ContentLibrary content, MatchSetup setup, MatchPlan plan,
         ulong seed, bool timeline = false, bool observe = true, List<ulong>? hashes = null)
     {
-        var record = new MatchRecord { Seed = seed, P0 = plan.P0, P1 = plan.P1, Map = plan.Map };
+        var record = new MatchRecord
+        {
+            Seed = seed, P0 = plan.P0, P1 = plan.P1, Map = plan.Map,
+            RegulationTicks = content.Rules.MatchLengthTicks,
+        };
         var sim = new Simulation(setup, seed);
         if (observe)
         {

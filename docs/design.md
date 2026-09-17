@@ -672,6 +672,21 @@ Themed factions released over time as content packs; fantasy faction first.
 - Netcode: custom deterministic lockstep with input relay. Photon Quantum is the fallback;
   decision at end of M1.
 
+## Balance targets (Sept 2026)
+The numbers a tuning session aims at. They are measured with the headless harness on twolane: a round robin with
+100 matches per ordered pairing for the win rates and the income ratio, and balanced-vs-balanced batches of 200
+matches for the mirror numbers. Every value they are reached with is still a placeholder.
+- Turtle personality overall win rate at or below 45%; no personality above 60% or below 40%.
+- Active-versus-turtle income ratio between 1.25 and 1.40 (this replaces the older "about 1/3 more" wording with a
+  band; the target itself is unchanged).
+- Keep-kill rate in balanced mirror matches between 20% and 35%, and at least one forward tower destroyed in at
+  least 60% of those matches.
+- Sudden death in fewer than 10% of matches.
+- No card whose structure damage per gold or kills per gold is more than double the median card's. The harness
+  pools both sides and prints each card against the median (batch, "Card efficiency"); structures and leader
+  abilities are left out because no gold is paid for them.
+Progress against them is logged per iteration in docs/balance-log.md.
+
 ## Milestones
 - M0 Setup (Sept-Oct 2026)
 - M1 Sim + bot, headless (Oct 2026-Jan 2027)

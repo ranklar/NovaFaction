@@ -8,14 +8,17 @@ using NovaFaction.Sim.Numerics;
 namespace NovaFaction.Sim
 {
     /// <summary>
-    /// Everything fixed before a match starts, apart from the seed: rules, map, structure stats and both decks.
-    /// Each deck carries its own faction roster, so the two players may use different factions.
+    /// Everything fixed before a match starts, apart from the seed: rules, map, structure stats, both decks (with
+    /// card levels) and each player's structure level. Each deck carries its own faction roster, so the two players
+    /// may use different factions.
     /// </summary>
     public sealed class MatchSetup
     {
         private readonly Deck[] _decks;
+        private readonly int[] _structureLevels;
 
-        public MatchSetup(MatchRules rules, MapDefinition map, StructureCatalog structures, Deck deck0, Deck deck1)
+        public MatchSetup(MatchRules rules, MapDefinition map, StructureCatalog structures, Deck deck0, Deck deck1,
+            int structureLevel0 = 1, int structureLevel1 = 1)
         {
             Rules = rules ?? throw new ArgumentNullException(nameof(rules));
             Map = map ?? throw new ArgumentNullException(nameof(map));
@@ -25,14 +28,32 @@ namespace NovaFaction.Sim
                 deck0 ?? throw new ArgumentNullException(nameof(deck0)),
                 deck1 ?? throw new ArgumentNullException(nameof(deck1)),
             };
+            _structureLevels = new[] { structureLevel0, structureLevel1 };
+            foreach (int level in _structureLevels)
+            {
+                if (level < 1 || level > rules.MaxUnitLevel)
+                {
+                    throw new ArgumentException("Structure levels must be between 1 and maxUnitLevel ("
+                        + rules.MaxUnitLevel + ") but one is " + level + ".");
+                }
+            }
             foreach (Deck deck in _decks)
             {
                 if (deck.Cards.Count != rules.DeckSize)
                 {
                     throw new ArgumentException("Every deck must have " + rules.DeckSize + " cards.");
                 }
+                for (int i = 0; i < deck.Cards.Count; i++)
+                {
+                    if (deck.Levels[i] > rules.MaxUnitLevel)
+                    {
+                        throw new ArgumentException("Card \"" + deck.Cards[i].Id + "\" has level " + deck.Levels[i]
+                            + " but maxUnitLevel is " + rules.MaxUnitLevel + ".");
+                    }
+                }
                 CheckSpeeds(deck);
                 CheckSpellTimes(deck);
+                CheckAbilityTimes(deck.Leader);
             }
             // A mine's own cell is blocked, so units can only stand next to it: the radius must reach that far.
             if (map.Mines.Count > 0 && rules.MineCaptureRadius < map.CellSize)
@@ -54,9 +75,15 @@ namespace NovaFaction.Sim
 
         public Deck GetDeck(int player) => _decks[MapDefinition.CheckPlayer(player)];
 
+        /// <summary>Each player's structure level (1 = base stats); scales their Keep and towers' Hp and Damage.</summary>
+        public IReadOnlyList<int> StructureLevels => _structureLevels;
+
+        public int GetStructureLevel(int player) => _structureLevels[MapDefinition.CheckPlayer(player)];
+
         /// <summary>
         /// Movement checks walkability only at the destination of each step, so a step must stay well
-        /// under one cell. Reject content that would move a unit more than half a cell per tick.
+        /// under one cell. Reject content that would move a unit more than half a cell per tick, at the fastest speed
+        /// the deck's leader can give it (passive alone, or passive plus a Rally).
         /// </summary>
         private void CheckSpeeds(Deck deck)
         {
@@ -70,12 +97,31 @@ namespace NovaFaction.Sim
                 {
                     continue;
                 }
-                if (card.MoveSpeed + maxPush > limit)
+                IReadOnlyList<Modifier> passive = deck.Leader.Passive;
+                Fix speed = StatMath.Apply(ModifierStat.MoveSpeed, card.MoveSpeed, card.Slot, passive);
+                LeaderAbilityDefinition? ability = deck.Leader.Ability;
+                if (ability != null && ability.Type == AbilityType.Rally)
+                {
+                    speed = Fix.Max(speed, StatMath.Apply(ModifierStat.MoveSpeed, card.MoveSpeed, card.Slot, passive,
+                        ability.Modifiers));
+                }
+                if (speed + maxPush > limit)
                 {
                     throw new ArgumentException("Unit \"" + card.Id + "\" moves too fast for this map and tick rate: "
-                        + "moveSpeed + unitSeparationPushPerSecond * (2 + unitStoppedPushFactor) must be at most "
+                        + "moveSpeed (with the leader's modifiers) + unitSeparationPushPerSecond * (2 + unitStoppedPushFactor) must be at most "
                         + limit + " world units per second.");
                 }
+            }
+        }
+
+        /// <summary>A leader ability's cooldown and duration must be whole ticks, like spell times.</summary>
+        private void CheckAbilityTimes(UnitDefinition leader)
+        {
+            LeaderAbilityDefinition? ability = leader.Ability;
+            if (ability != null && (!Rules.IsWholeTicks(ability.CooldownSeconds) || !Rules.IsWholeTicks(ability.DurationSeconds)))
+            {
+                throw new ArgumentException("Leader \"" + leader.Id + "\": the ability's cooldownSeconds and durationSeconds "
+                    + "must each be a whole number of ticks (a multiple of 1/" + Rules.TicksPerSecond + " s).");
             }
         }
 

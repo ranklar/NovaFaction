@@ -78,7 +78,7 @@ public class DeterminismTests
     /// </summary>
     [Theory]
     [InlineData(2024UL)]
-    [InlineData(5UL)]
+    [InlineData(6UL)] // was 5 until Sept 2026: with leader buffs that script ends with only 4 survivors (none stuck)
     [InlineData(7UL)]
     public void BusyScriptedBattle_HashesIdenticallyEveryTick_AndEndsWithNoStuckUnits(ulong inputSeed)
     {
@@ -139,11 +139,12 @@ public class DeterminismTests
         Assert.True(a.State.NextUnitId - 1 > a.State.Units.Count + 30, "units should have died");
         Assert.True(a.State.NextProjectileId > 300, "ranged units and structures should have fired");
         Assert.True(towerDamaged);
-        Assert.True(a.State.Units.Count >= 5, "enough units should survive for the check to mean something");
+        Assert.True(a.State.Units.Count >= 5, "enough units should survive for the check to mean something, survivors "
+            + a.State.Units.Count + ": " + string.Join(", ", a.State.Units.Select(u => u.DefinitionId + " p" + u.Owner + " " + u.State)));
 
         // No stuck units: a unit is stuck if it spent the last 5 s trying to walk and got less than a cell. (A unit
         // that just won a fight may still be walking when the clock runs out; that is fine.) A unit waiting at a mine
-        // is not moving at all; a mine contested by an enemy it cannot reach or hit stays contested for good.
+        // is not moving at all (and gives up if an enemy it cannot reach or hit keeps the mine contested).
         var stuck = a.State.Units.Where(u => u.State == UnitState.Moving && !stoppedInWindow.Contains(u.Id)
             && windowStart.TryGetValue(u.Id, out FixVector2 then) && FixVector2.Distance(then, u.Position) < Fix.One).ToList();
         Assert.True(a.State.Units.Count(u => u.State != UnitState.Moving) >= 5, "most survivors should have stopped");
@@ -360,12 +361,16 @@ public class DeterminismTests
             player.GoldFromMap = Fix.FromRaw(1); Changed("GoldFromMap of player " + p);
             player.CommandsReceived = 1; Changed("CommandsReceived of player " + p);
             player.IgnoredDeploys = 1; Changed("IgnoredDeploys of player " + p);
+            player.IgnoredAbilities = 1; Changed("IgnoredAbilities of player " + p);
+            player.AbilityReadyTick = 9; Changed("AbilityReadyTick of player " + p);
             player.Cards.Play(2); Changed("hand/cycle order of player " + p);
             player.Cards.ClearSlot(1); Changed("empty hand slot of player " + p);
         }
 
         UnitDefinition golem = s.GetPlayer(0).Deck.Roster.Get("stone_golem");
         s.PendingSpawnList.Add(new PendingSpawn(40, 0, golem, TestSim.V("4", "4"))); Changed("pending spawn");
+        s.PendingSpawnList.Add(new PendingSpawn(40, 0, golem, TestSim.V("4", "4"), 1)); Changed("second pending spawn");
+        s.PendingSpawnList[1] = new PendingSpawn(40, 0, golem, TestSim.V("4", "4"), 2); Changed("pending spawn level");
         s.NextUnitId = 7; Changed("NextUnitId");
         Unit unit = s.AddUnit(1, golem, TestSim.V("4", "20")); Changed("unit added");
         unit.Position = TestSim.V("4", "21"); Changed("unit position");
@@ -375,6 +380,19 @@ public class DeterminismTests
         unit.Target = TargetRef.Structure(2); Changed("unit target structure");
         unit.Target = TargetRef.Unit(2); Changed("unit target unit (same number)");
         unit.AttackCooldownTicks = 3; Changed("unit cooldown");
+        unit.CaptureStallTicks = 2; Changed("unit capture stall");
+        unit.IgnoreMinesUntilTick = 50; Changed("unit mine-ignore tick");
+        var rally = new[] { new Modifier(ModifierStat.Range, ModifierKind.Add, Fix.One, null) };
+        unit.SetBuff(new TimedBuff(rally, 30)); Changed("unit buff (and its effective range)");
+        unit.SetBuff(new TimedBuff(rally, 31)); Changed("unit buff expiry");
+        var hpRally = new[] { new Modifier(ModifierStat.Hp, ModifierKind.Add, Fix.Epsilon, null) };
+        unit.SetBuff(new TimedBuff(hpRally, 31)); Changed("unit buff modifiers");
+        Unit levelled = s.AddUnit(1, golem, TestSim.V("5", "20"), 1);
+        seen.Add(sim.ComputeHash());
+        s.UnitList.Remove(levelled);
+        // Same stats (level factor 1), only the level number differs.
+        s.UnitList.Add(new Unit(levelled.Id, 1, golem, levelled.Position, 2, Fix.One, s.GetPlayer(1).Passive));
+        Changed("unit level");
 
         foreach (StructureState structure in s.Structures)
         {
@@ -447,7 +465,8 @@ public class DeterminismTests
   ""unitSeparationDistance"": 0.6, ""unitSeparationPushPerSecond"": 1.5, ""unitSpawnSpacing"": 0.5,
   ""suddenDeathIncomeMultiplier"": 2, ""unitStoppedPushFactor"": 0.3, ""aggroRadius"": 5.5, ""meleeTargetCrowdPenalty"": 1,
   ""mineCaptureRadius"": 1.5, ""mineCaptureSeconds"": 5, ""mineIncomePerSecond"": 0.05, ""mineIncomeCap"": 0.1,
-  ""chestFirstSpawnSeconds"": 30, ""chestSpawnIntervalSeconds"": 30, ""chestGold"": 0.75, ""chestCollectRadius"": 0.75 }");
+  ""chestFirstSpawnSeconds"": 30, ""chestSpawnIntervalSeconds"": 30, ""chestGold"": 0.75, ""chestCollectRadius"": 0.75,
+  ""mineCaptureGiveUpSeconds"": 3, ""mineCaptureRetrySeconds"": 6, ""maxUnitLevel"": 15, ""levelStatBonusPerLevel"": 0.06 }");
         // Likewise a fixed inline map, so editing content/maps does not move the pin.
         MapDefinition map = MapTestData.Small();
         // ...and fixed structure stats, so tuning content/structures.json does not move it either.
@@ -460,7 +479,9 @@ public class DeterminismTests
         _output.WriteLine("units " + s.Units.Count + " created " + (s.NextUnitId - 1) + " shots " + s.NextProjectileId
             + " scores " + s.Players[0].Score + "/" + s.Players[1].Score + " map gold " + s.Players[0].GoldFromMap + "/"
             + s.Players[1].GoldFromMap + " spells " + (s.NextSpellId - 1) + " mines " + string.Join(",", s.Mines.Select(m => m.Owner)) + " end " + s.Tick + " " + s.EndReason + " "
-            + s.TieBreakRule + " winner " + s.Winner + " hash 0x" + sim.ComputeHash().ToString("X16")
+            + s.TieBreakRule + " winner " + s.Winner + " abilities ready " + s.Players[0].AbilityReadyTick + "/"
+            + s.Players[1].AbilityReadyTick + " ignored " + s.Players[0].IgnoredAbilities + "/" + s.Players[1].IgnoredAbilities
+            + " hash 0x" + sim.ComputeHash().ToString("X16")
             + " initial 0x" + initialHash.ToString("X16"));
         Assert.Equal(PinnedInitialHash, initialHash);
         Assert.True(s.Players.All(p => p.IgnoredDeploys > 0), "scripted match should include rejected deploys");
@@ -469,14 +490,16 @@ public class DeterminismTests
         Assert.True(s.Players.All(p => p.Score > Fix.Zero), "both players should have damaged structures");
         Assert.True(s.Players.All(p => p.GoldFromMap > Fix.Zero), "the pin should cover chest collection");
         Assert.True(s.NextSpellId > 3, "the pin should cover spell casts");
+        Assert.True(s.Players.Any(p => p.AbilityReadyTick > 0), "the pin should cover a leader ability");
+        Assert.True(s.Players.All(p => p.IgnoredAbilities > 0), "the pin should cover rejected abilities");
         Assert.NotEqual(EndReason.None, s.EndReason);
         Assert.Equal(PinnedFinalHash, sim.ComputeHash());
     }
 
-    // Re-pinned Sept 2026 for hash format 6 (spell cards: Fireball replaces the fire spirit in the deck, pending
-    // spells and zones are hashed; units stop to capture mines).
-    private const ulong PinnedInitialHash = 0x2518A5C578D154ABUL;
-    private const ulong PinnedFinalHash = 0x051307BD582EF1BDUL;
+    // Re-pinned Sept 2026 for hash format 7 (levels, leader passive and War Cry, capture give-up; the scripted
+    // LeaderAbility commands now act or are counted as ignored).
+    private const ulong PinnedInitialHash = 0x3EEBA7B72A3551E2UL;
+    private const ulong PinnedFinalHash = 0x3C65BB24DCB37D9AUL;
 }
 
 public class StateHasherTests

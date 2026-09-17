@@ -28,7 +28,8 @@ Themed factions released over time as content packs; fantasy faction first.
 - Cards are units or spells (implemented Sept 2026; see "Spells"). Spells can be cast anywhere on the map.
 - Deck of 8 = 1 leader + 7 cards (units and spells mixed freely). Hand of 4, next card visible. Cycle order shuffled from
   the match seed, then loops.
-- Leader deploys like a unit; carries the faction passive and an active ability on cooldown.
+- Leader deploys like a unit; carries the faction passive and an active ability on cooldown
+  (implemented Sept 2026; see "Stat modifiers, levels and leaders").
 - 1s spawn delay on deploy. Deploy zones are map data (own side + around held structures).
 
 ## Maps
@@ -65,7 +66,8 @@ Themed factions released over time as content packs; fantasy faction first.
 - Units earned via campaign, ranked season rewards, season pass; or bought outright with gems.
   Every unit is earnable.
 - Unit levels cost coins + shards (duplicates). Shards from play; gem purchase allowed under a
-  daily cap. ~5-7% stat gain per level.
+  daily cap. ~5-7% stat gain per level (in the sim since Sept 2026: Hp and Damage +6% of base per level,
+  levels 1-15; see "Stat modifiers, levels and leaders").
 - Matchmaking: rating + deck power (average unit level). Level cap per league.
 - Season pass: 30-day cycle, free and paid tracks. Home of faction/map releases.
 - Daily quests (3) and weekly quests for coins, shards, a trickle of gems.
@@ -108,7 +110,10 @@ Themed factions released over time as content packs; fantasy faction first.
     required; unknown keys are errors. JSON has no comments, so values that are still guesses are listed
     by name in "tuningPlaceholders". Current placeholders: base income 0.35 gold/s (about Clash Royale's
     pace), 5 starting gold, the four unit movement values (see "Units, decks and movement"), the two
-    targeting values (see "Combat and match resolution") and all eight map gold values (see "Map gold").
+    targeting values (see "Combat and match resolution"), all eight map gold values (see "Map gold"), the two
+    capture give-up times (mineCaptureGiveUpSeconds 3, mineCaptureRetrySeconds 6; see "Map gold") and the two level
+    values (maxUnitLevel 15, levelStatBonusPerLevel 0.06; see "Stat modifiers, levels and leaders").
+    The give-up and retry times must be whole ticks; maxUnitLevel is 1-100; levelStatBonusPerLevel is 0-1.
     suddenDeathIncomeMultiplier (2) is design data, not a placeholder; base income times it must not
     exceed the gold cap. unitStoppedPushFactor must be 0..1.
     The spawn delay must be a whole number of ticks. handSize must be less than deckSize.
@@ -121,16 +126,17 @@ Themed factions released over time as content packs; fantasy faction first.
     Malformed commands (bad player/slot/type, wrong tick, duplicate player+sequence) make Tick()
     throw with state unchanged; they are input-layer bugs, not gameplay. Game-rule rejections
     (empty hand slot, not enough gold, target not deployable) are deterministic no-ops that only
-    increase the player's IgnoredDeploys counter, which is in the state hash.
+    increase the player's IgnoredDeploys counter, which is in the state hash. A rejected LeaderAbility
+    (see "Stat modifiers, levels and leaders") likewise only increases IgnoredAbilities.
   - Simulation.Tick(commands) order: validate, record in the CommandLog, apply commands in
-    canonical order, create units of zero-delay deploys, combat, spells and movement (see "Combat and match
-    resolution" and "Spells"), resolve Keep kills and sudden-death damage, mine capture then chest collection (see
-    "Map gold"), accrue income (base plus mines, multiplied in sudden death), advance tick and clock;
-    then, unless the match just ended, create units whose spawn delay is over, spawn a due chest wave,
-    and handle clock expiry.
+    canonical order (leader Heal and Rally act here), create units of zero-delay deploys, combat, spells and
+    movement (see "Combat and match resolution" and "Spells"), resolve Keep kills and sudden-death damage, mine
+    capture, capture give-ups, then chest collection (see "Map gold"), accrue income (base plus mines, multiplied
+    in sudden death), advance tick and clock, remove Rally buffs whose time is up; then, unless the match just
+    ended, create units whose spawn delay is over, spawn a due chest wave, and handle clock expiry.
     Tick N's commands must be stamped N (State.Tick before the call). A 3:00 match is 3600 ticks.
-  - A match is built from a MatchSetup (rules, map, structure stats, player 0's deck, player 1's deck)
-    plus the seed:
+  - A match is built from a MatchSetup (rules, map, structure stats, player 0's deck, player 1's deck, and
+    optionally each player's structure level, default 1) plus the seed:
     new Simulation(setup, seed); Simulation.Replay(setup, seed, log). Each deck carries its own
     faction roster, so the two players may later bring different factions.
   - Income is exact: each tick adds income/ticksPerSecond with the sub-raw remainder carried per
@@ -140,27 +146,33 @@ Themed factions released over time as content packs; fantasy faction first.
   - Clock expiry: see "Combat and match resolution".
   - State hash: 64-bit FNV-1a over little-endian bytes, starting with a hash format version.
     Covers tick, RNG state, clock, phase, winner, end reason, tie-break rule, and per player: gold
-    raw, income carry, mine income carry, score, gold from map, command count, ignored deploys, the
-    deck's card catalog content hash (units and spells), hand slots and draw queue. Then the map, the structures file's
-    content hash, every structure's combat state (index order: index, hp, attack cooldown, target unit
-    id), the next unit id, every unit (id order: id, owner, card id, position, hp, state, objective,
-    target kind and id, attack cooldown), every pending spawn (deploy order), the next projectile id and
+    raw, income carry, mine income carry, score, gold from map, command count, ignored deploys, ignored
+    abilities, ability ready tick, the deck's card catalog content hash (units and spells), the deck's card
+    levels (sorted card order), the structure level, hand slots and draw queue. Then the map, the structures file's
+    content hash, every structure's combat state (index order: index, max hp, damage, hp, attack cooldown, target
+    unit id), the next unit id, every unit (id order: id, owner, card id, position, hp, state, objective,
+    target kind and id, attack cooldown, level, the five effective stats, the Rally buff (present, expiry tick,
+    modifiers), capture stall ticks, mine-ignore tick), every pending spawn (deploy order, with its level), the
+    next projectile id and
     every projectile (id order: id, owner, position, target, aim point, speed per tick, damage, splash
     radius, target layer), every mine (index order: index, owner, capturing player, capture progress
     ticks), every chest spawn (index order: index, chest present), the next spell id, every pending spell
     and then every active spell zone (both in id order: id, owner, spell id, target, land tick, end tick,
-    pulse interval). Unit state includes Capturing. Hash format version is 6.
+    pulse interval, unit damage, structure damage). Unit state includes Capturing. Hash format version is 7
+    (Sept 2026: levels, leaders and capture give-up).
     New state implements IStateHashable and appends count-then-items in id order.
     A test pins the hash of a scripted full match on the small test map with fixed inline rules and
-    structure stats (it includes kills, projectiles, chest pickups by both players, Fireball casts and a
-    Keep kill); change it only on purpose.
+    structure stats (it includes kills, projectiles, chest pickups by both players, Fireball casts, a War Cry,
+    rejected leader abilities and a Keep kill); change it only on purpose.
   - Replay = rules + seed + CommandLog (Simulation.Replay). The log is in memory only for now.
   - Replay file format (decided Sept 2026, not implemented yet): compact, versioned binary.
     Header: replay format version, sim version, content version, rules version, seed, map id (plus
-    the map's content hash), and both players' decks: each deck's faction, card ids and the unit
-    level of every card. Body: the command log.
+    the map's content hash), both players' decks (each deck's faction, card ids and the unit
+    level of every card) and both players' structure levels. Body: the command log.
     Decided Sept 2026: the header must carry the map id, both decks (card ids plus unit levels) and
     the rules version. rules.json has no version field yet; add one when replays are built.
+    Since Sept 2026 the sim has everything the header needs: Deck.Levels (sorted card order) and
+    MatchSetup.StructureLevels (decided then: structure levels also go in the header, since they change the match).
     A JSON export of the same data exists for debugging only; the binary file is authoritative
     (it is what the server verifies).
 - Sim map layer (sim/NovaFaction.Sim/Map):
@@ -217,6 +229,7 @@ Themed factions released over time as content packs; fantasy faction first.
     targetPriority (any = enemy units and structures, structuresOnly), isFlying, spawnCount (1-25),
     isLeader (must be true exactly when slot is leader). Optional: projectileSpeed (> 0; present =
     ranged, absent = melee), splashRadius (> 0; absent = single target), canCapture (see "Map gold"),
+    passive and ability (leaders only; see "Stat modifiers, levels and leaders"),
     "placeholder": true marks numbers that are guesses. Unknown keys are errors. The file's content
     hash (from parsed data) is part of the state hash.
   - content/factions/fantasy/units.json: 7 placeholder units, one per requested job: stone_golem
@@ -224,15 +237,17 @@ Themed factions released over time as content packs; fantasy faction first.
     catapult (siege) and warlord (leader). The fire_spirit spell stand-in was removed in Sept 2026 when the
     Fireball spell replaced it. Every number is a placeholder. Ranged: elf_archer (projectile 10/s) and
     catapult (6/s). Splash: catapult (1.25). Structures only: stone_golem and catapult. Capturers (by the
-    default rule): knight, goblin_pack, elf_archer, warlord.
+    default rule): knight, goblin_pack, elf_archer, warlord. The warlord's passive (+10% damage for bruiser and
+    swarm) and War Cry ability are placeholders too.
   - Range is measured from the unit's center to the nearest point of the target's footprint, so
     melee units use a small positive range (0.5).
   - Deck: exactly deckSize (8) different card ids from one faction's card catalog (units.json plus
     spells.json), exactly one of them a leader unit (no duplicate cards). Unit and spell cards mix freely.
     Stored sorted by id, so the order a player lists cards never matters. The default test deck is the 7
     units plus Fireball.
-    Unit levels are not part of the deck yet; they arrive with progression and belong in the replay
-    header.
+    Each card has a level (default 1) given alongside the ids and kept with its card after sorting
+    (Deck.Levels, Deck.GetLevel). Deck.Create accepts 1-100; MatchSetup rejects levels above the rules'
+    maxUnitLevel. Where levels come from (the server's progression data) is decided with M3.
   - Hand: at match start player 0's deck is shuffled with the match RNG, then player 1's. The first
     handSize cards are the hand (slots 0-3), the rest the queue; the front of the queue is the
     visible next card. Playing a slot puts the next card into that slot and the played card at the
@@ -250,9 +265,11 @@ Themed factions released over time as content packs; fantasy faction first.
     back, then the diagonals, then the next ring. Rotated 180 degrees for player 1 so both players'
     formations face the enemy the same way. A position on a blocked cell moves to the nearest
     walkable cell center within 3 cells (ties: lower row, then left), else to the deploy target.
-  - Units: id (from 1, never reused), owner, card, position, hp, state (Spawning, Moving, Holding,
-    Attacking, Capturing), objective (structure index or none), target (enemy unit id, structure index or none)
-    and attack cooldown. Stored in id order. Holding now means "nothing it can attack" (e.g. no enemy
+  - Units: id (from 1, never reused), owner, card, level, position, hp, effective stats (max hp, damage, move
+    speed, range, attack interval; see "Stat modifiers, levels and leaders"), Rally buff, state (Spawning, Moving,
+    Holding, Attacking, Capturing), objective (structure index or none), target (enemy unit id, structure index or
+    none), attack cooldown, and the capture give-up counters (see "Map gold"). Combat and movement use the
+    effective stats, never the card's base numbers. Stored in id order. Holding now means "nothing it can attack" (e.g. no enemy
     structure left); a unit in range of its target is Attacking.
     The client reads MatchState.Units, Structures, Projectiles, PendingSpawns, PendingSpells, SpellZones,
     Mines, Chests, Winner/EndReason and each player's Cards (Hand, NextCard, Queue; each card has a Kind,
@@ -290,14 +307,17 @@ Themed factions released over time as content packs; fantasy faction first.
     - Ground step: take the full step if it lands on a walkable cell without cutting a blocked
       corner; otherwise the pure flow step (always open); otherwise stay. MatchSetup rejects content
       where moveSpeed + push * (2 + unitStoppedPushFactor) would exceed half a cell per tick, which keeps
-      these checks sound.
+      these checks sound. moveSpeed here is the fastest the deck's leader can make the unit (its passive, and
+      its passive plus a Rally), so War Cry's +20% lowers the base speed limit from 6.55 to about 5.46.
 - Combat and match resolution (sim/NovaFaction.Sim/Combat):
   - content/structures.json: formatVersion (1) and one entry per kind, "keep" and "tower" (the map file
     names): hp, damage, attackIntervalSeconds, range, targets, projectileSpeed, destructionBonus, optional
     "placeholder". All current numbers are placeholders: Keep 4000 HP, 90 damage every 1 s, range 6,
     bonus 1000; tower 2500 HP, 80 damage every 0.8 s, range 7, bonus 500; both target both layers and
     shoot at 10 units/s. The Keep attacks from the start (no Clash Royale style activation yet).
-    Its content hash is part of the state hash.
+    Its content hash is part of the state hash. Each player's structures have a structure level (MatchSetup,
+    default 1, 1..maxUnitLevel) that scales their hp and damage like a card level (StructureState.MaxHp and
+    Damage); the other stats and the destruction bonus are not scaled.
   - Structures track HP (MatchState.Structures). At 0 HP a structure is destroyed: footprint walkable,
     flow fields rebuild, a tower's unlock zone goes to the attacker, every unit re-picks its objective.
   - Who can hit what: Ground attackers hit ground units and structures; Air attackers hit only flyers
@@ -336,8 +356,9 @@ Themed factions released over time as content packs; fantasy faction first.
     within the radius of the impact point, and every enemy structure whose footprint is. Priority does
     not matter for splash (a structuresOnly catapult's splash still hurts units). No friendly fire.
   - Tick order inside combat: cooldowns; unit decisions; structure decisions; projectiles in flight
-    move and arrive; spell zones pulse and due spells land (see "Spells"); units then structures attack;
-    all hits apply in that order (projectile id, spell hits, unit id, structure index); moving units that are still alive step; units at 0 HP are removed; targets
+    move and arrive; spell zones pulse and due spells land (see "Spells"); leader AreaDamage casts from this tick
+    hit; units then structures attack; all hits apply in that order (projectile id, spell hits, ability hits in
+    command order, unit id, structure index); moving units that are still alive step; units at 0 HP are removed; targets
     pointing at removed units or destroyed structures are cleared. All hits in a tick are
     simultaneous: a unit killed this tick still gets its attack.
   - Score: HP actually removed from enemy structures (a hit is capped by the HP left) plus the
@@ -421,6 +442,21 @@ Themed factions released over time as content packs; fantasy faction first.
     - The capture itself is unchanged: presence still counts every unit near the mine, flyers and
       non-capturers included (they just do not stop). A Capturing unit counts as stopped for separation.
     - mineCaptureSeconds reduced from 5 to 4 (placeholder).
+  - Capture give-up (decided and implemented Sept 2026; resolves the "stuck at a contested mine" open item):
+    - After mine capture each tick, every Capturing unit checks whether its capture moved forward: some mine within
+      mineCaptureRadius advanced for its player this tick (its own progress grew, the capture completed, or the
+      other player's stored progress was unwound because this player was alone). If so its stall count is 0;
+      otherwise the count grows by one. A unit that is not Capturing (walking, fighting) has a count of 0, so a
+      fight in between starts the count over.
+    - When the count reaches mineCaptureGiveUpSeconds (3 s = 60 ticks, placeholder) the unit gives up: the count
+      resets and the unit ignores mines on the next mineCaptureRetrySeconds of ticks (6 s = 120, placeholder).
+      It stays Capturing for the rest of that tick and walks on toward its objective from the next one, like after
+      a finished capture. While ignoring mines it never stops at one (the passing stop is off too); presence at a
+      mine still counts as usual.
+    - Example: a knight contested by an enemy flyer from tick 10 gives up on tick 69, moves from tick 70, and may
+      stop at a mine again from tick 190. A capturer that cannot leave (speed 0) captures 60 ticks, ignores 120,
+      captures 60 again, and so on.
+    - In practice only a contested mine stalls a capture: a lone capturer always moves progress.
 - Spells (sim/NovaFaction.Sim/Content/SpellBook.cs, CardCatalog.cs, Spells/, implemented Sept 2026):
   - Card model: a card is a unit card (UnitDefinition, units.json) or a spell card (SpellDefinition,
     spells.json); both derive from CardDefinition (id, displayName, cost, kind, slot, isLeader, placeholder).
@@ -455,6 +491,55 @@ Themed factions released over time as content packs; fantasy faction first.
     splash. No friendly fire. Structure damage scores, destroys structures (bonus, unlocked zones) and counts
     as sudden-death first damage exactly like attack damage. Spells use no randomness.
   - Decks keep 8 cards with exactly one leader; the fire_spirit unit is gone (Fireball replaces it).
+  - Spell levels (decided Sept 2026): a spell card's level scales its damage (units and structures) by the same
+    level factor as unit damage, fixed at cast time (SpellInstance.Damage and StructureDamage). Leader passives and
+    Rally buffs never change spells.
+- Stat modifiers, levels and leaders (sim/NovaFaction.Sim/Content/Modifiers.cs, LeaderAbility.cs, implemented Sept 2026):
+  - Modifier: stat (hp, damage, moveSpeed, range, attackInterval), kind (multiply or add), value, appliesTo ("all"
+    or a non-empty list of unit slots; "spell" is not allowed, no duplicates). JSON:
+    { "stat": "damage", "kind": "multiply", "value": 1.1, "appliesTo": ["bruiser", "swarm"] }. All four keys are
+    required. A multiply value is the factor (1.1 = +10%), 0..100; an add value is -1000000..1000000.
+  - Effective stat = (base * level factor + sum of add values) * (1 + sum of (multiply value - 1)), over every
+    modifier (leader passive plus Rally buff) whose appliesTo matches the unit's slot (decided Sept 2026: bonuses
+    add up rather than compound, so +10% and +30% make +40%; Fix sums are exact, so modifier order never matters).
+    Results are clamped: hp, range and attack interval at least the smallest positive Fix, damage and speed at
+    least 0. A multiply on attackInterval above 1 makes attacks slower. Only hp and damage have a level factor.
+  - Levels: level factor = 1 + levelStatBonusPerLevel * (level - 1), placeholder 0.06 (the doc's 5-7%), so a level 5
+    card has 1.24x hp and damage. maxUnitLevel is 15 (placeholder). 0.06 is not exact in Q48.16 (0.0599976), so a
+    level 5 golem has 2231.98 hp rather than 2232; that is deterministic and fine.
+  - Effective stats are computed when a unit is created and whenever its Rally buff is added, replaced or removed.
+    When max hp changes, current hp keeps its share: hp * newMax / oldMax, in one exact 128-bit step, rounded to
+    the nearest raw unit, never below the smallest positive value for a living unit.
+  - Leader passive (units.json "passive", leaders only, optional, default none): a list of modifiers that applies
+    to every unit of the deck's owner for the whole match, from tick 0, whether or not the leader was ever deployed
+    or is alive (it comes from the deck, not the unit). It applies to units only, never to structures or spells.
+    Placeholder: warlord +10% damage for bruiser and swarm (knight 154, goblins 66).
+  - Leader ability (units.json "ability", leaders only, optional): displayName, type (areaDamage, rally, heal),
+    radius (> 0), range (>= 0), cooldownSeconds (> 0, at most 600), plus per type: rally: durationSeconds (> 0, at
+    most 600) and modifiers (at least one); areaDamage: damage (>= 0) and optional structureDamageMultiplier (default
+    0.35 like spells); heal: amount (> 0). Keys of another type are errors. Times must be whole ticks (MatchSetup).
+    Placeholder: warlord "War Cry", rally, +30% damage and +20% move speed for all units, 5 s, radius 4, range 6,
+    cooldown 20 s.
+  - LeaderAbility command (target = world point) is used when all hold: the deck's leader has an ability; a living
+    unit of the player whose card is a leader is on the field (a Spawning unit counts; a pending spawn does not)
+    with the target within the ability's range of its center (<=, any such leader will do); and State.Tick >= the
+    player's AbilityReadyTick (0 at the start: no initial cooldown). Otherwise it is ignored and only
+    IgnoredAbilities grows. A use sets AbilityReadyTick = tick + cooldown ticks (a 20 s cooldown used on tick 0
+    allows the next use on tick 400).
+  - Effects, on units whose center is within radius of the target (<=), taken at command time (start-of-tick
+    positions), in unit id order:
+    - rally: every living friendly unit (the leader included, both layers) gets the buff: the modifiers until
+      ExpireTick = cast tick + duration ticks. It is active in the cast tick's combat and removed at the end of tick
+      ExpireTick - 1 (when State.Tick reaches ExpireTick), so a 5 s rally lasts exactly 100 ticks. A unit has at
+      most one buff: a new Rally replaces the old one (refreshing its time) instead of stacking. Units created later
+      and units that walk into the radius later are not buffed. The buff outlives the leader.
+    - heal: every living friendly unit gains amount hp, capped at its max hp.
+    - areaDamage: resolved in this tick's combat like an instant spell hitting both layers: every enemy unit in
+      radius takes the damage and every enemy structure whose footprint is in radius takes damage *
+      structureDamageMultiplier (scores, destroys, counts as sudden-death damage).
+    - Heal and areaDamage amounts scale with the leader card's level factor (decided Sept 2026).
+  - Two copies of the leader can be on the field if the card cycles round while the first is alive; the cooldown
+    is per player, so that gives no extra casts.
 - server/: ASP.NET Core (C#). Accounts, economy, matchmaking, input relay, match verification by
   re-running the sim. PostgreSQL. Runs on the Windows desktop for LAN testing; cloud container later.
 - content/: JSON data for units, factions, maps, missions. Art in Addressables bundles per theme.
@@ -475,7 +560,11 @@ Themed factions released over time as content packs; fantasy faction first.
 - Fantasy roster: the 16 units and 2 leaders.
 - Income, cost and match-length numbers (tune in the headless harness).
 - Replay implementation (header decided above): add a rules version field to rules.json.
-- Unit levels: where they come from and how they scale stats (~5-7% per level) in the sim.
+- Unit levels: the sim scales them (Sept 2026); where they come from (server progression data, league level
+  caps) is decided with M3. The level numbers (maxUnitLevel 15, +6% per level) are placeholders.
+- Leader numbers (the warlord passive and War Cry) are placeholders; the second fantasy leader has no passive or
+  ability yet. The bot does not use leader abilities yet. The client can show the cooldown from
+  PlayerState.AbilityReadyTick and buffs from Unit.Buff.
 - Enemy units do not block or push each other (decided to leave as is with combat; revisit if fights
   look wrong on the phone).
 - Spell numbers (cost, radius, damage, delays, the 0.35 structure multiplier) are placeholders; tune in the
@@ -491,8 +580,7 @@ Themed factions released over time as content packs; fantasy faction first.
 - Units still never walk to a mine or chest on purpose (their objective is always a structure); since
   Sept 2026 capturers stop at mines they happen to pass. The bot, and later mission design, must deploy
   toward mines on purpose. Revisit if players find mines hard to hold.
-- Capture stops can hold a unit at a contested mine for good when the enemy there is one it cannot hit or
-  reach (for example an enemy flyer hovering over the mine next to a ground-only knight). Decide when tuning
-  whether a capturer should give up after a while.
+- Capture give-up (Sept 2026) replaced the old "held at a contested mine for good" behavior; its 3 s / 6 s
+  times are placeholders to tune in the headless harness.
 - Crowding at structures (fixed Sept 2026 with the weak stopped push and sideways slide): a busy
   scripted battle test requires that every living unit is Attacking or Holding at the end.

@@ -60,7 +60,9 @@ public class CombatTests
         Simulation sim = NewSim();
         Unit knight = Place(sim, 0, "knight", "9", "11");
         Unit goblin = Place(sim, 1, "goblin_pack", "9", "11.4");
-        Fix knightHit = knight.Definition.Damage, goblinHit = goblin.Definition.Damage;
+        // Live stats: the deck's Warlord passive gives bruisers and swarms +10% damage (140 -> 154, 60 -> 66).
+        Fix knightHit = knight.Damage, goblinHit = goblin.Damage;
+        Assert.True(knightHit > knight.Definition.Damage && goblinHit > goblin.Definition.Damage);
         int knightInterval = TargetRules.IntervalTicks(knight.Definition.AttackIntervalSeconds, 20); // 1.2 s = 24
         Assert.Equal(24, knightInterval);
 
@@ -73,7 +75,7 @@ public class CombatTests
         Assert.Empty(sim.State.Projectiles);
         Assert.Equal(knightInterval, knight.AttackCooldownTicks);
 
-        // The goblin (160 HP) survives the first 140-damage hit and dies to the second, on tick 24.
+        // The goblin (160 HP) survives the first 154-damage hit and dies to the second, on tick 24.
         for (int t = 1; t < knightInterval; t++)
         {
             Step(sim);
@@ -320,7 +322,8 @@ public class CombatTests
         Unit c = Place(sim, 1, "dummy", "9", "13.5");
         Step(sim);
         Assert.Equal(TargetRef.Unit(a.Id), spirit.Target);
-        Fix damage = spirit.Definition.Damage;
+        Fix damage = spirit.Damage; // a bruiser: +10% from the deck's Warlord passive
+        Assert.True(damage > spirit.Definition.Damage);
         Assert.Equal(a.Definition.Hp - damage, a.Hp);
         Assert.Equal(b.Definition.Hp - damage, b.Hp);
         Assert.Equal(c.Definition.Hp, c.Hp);
@@ -393,17 +396,18 @@ public class CombatTests
         FixVector2 onFootprint = TestSim.V("3.5", "24.5");
         Assert.Equal(Fix.MaxValue, map.FlowFields.Get(Keep1).GetDistance(onFootprint));
 
-        // Two knights (140 per hit each, every 24 ticks) under the 500 HP tower.
+        // Two knights (about 154 per hit each with the Warlord passive, every 24 ticks) under the 500 HP tower.
         Unit a = Place(sim, 0, "knight", "3.6", "23.5");
         Unit b = Place(sim, 0, "knight", "4.4", "23.5");
         Step(sim);
         StructureState tower = sim.State.Structures[Tower1West];
-        Assert.Equal(Fix.FromInt(500 - 280), tower.Hp);
-        Assert.Equal(Fix.FromInt(280), sim.State.GetPlayer(0).Score);
+        Fix both = a.Damage + b.Damage;
+        Assert.Equal(Fix.FromInt(500) - both, tower.Hp);
+        Assert.Equal(both, sim.State.GetPlayer(0).Score);
         TestSim.Run(sim, 23);
         Assert.False(tower.IsDestroyed);
 
-        Step(sim); // tick 24: 280 more damage, only 220 of it removable
+        Step(sim); // tick 24: about 308 more damage, only about 192 of it removable
         Assert.True(tower.IsDestroyed);
         Assert.Equal(Fix.Zero, tower.Hp);
         Assert.Equal(Fix.FromInt(500 + 300), sim.State.GetPlayer(0).Score); // HP removed + destruction bonus

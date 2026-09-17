@@ -46,7 +46,7 @@ namespace NovaFaction.Sim.Units
         }
 
         internal static bool IsInRange(Grid grid, Unit unit, FixVector2 position, int structure) =>
-            DistanceToFootprint(grid, position, structure) <= unit.Definition.Range;
+            DistanceToFootprint(grid, position, structure) <= unit.Range;
 
         /// <summary>Distance from a point to the nearest point of a structure's footprint (0 inside it).</summary>
         internal static Fix DistanceToFootprint(Grid grid, FixVector2 position, int structure)

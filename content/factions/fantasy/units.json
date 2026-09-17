@@ -122,6 +122,21 @@
       "isFlying": false,
       "spawnCount": 1,
       "isLeader": true,
+      "passive": [
+        { "stat": "damage", "kind": "multiply", "value": 1.1, "appliesTo": ["bruiser", "swarm"] }
+      ],
+      "ability": {
+        "displayName": "War Cry",
+        "type": "rally",
+        "radius": 4,
+        "range": 6,
+        "cooldownSeconds": 20,
+        "durationSeconds": 5,
+        "modifiers": [
+          { "stat": "damage", "kind": "multiply", "value": 1.3, "appliesTo": "all" },
+          { "stat": "moveSpeed", "kind": "multiply", "value": 1.2, "appliesTo": "all" }
+        ]
+      },
       "placeholder": true
     }
   ]

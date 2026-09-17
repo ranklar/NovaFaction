@@ -23,6 +23,10 @@
   "chestSpawnIntervalSeconds": 30,
   "chestGold": 0.75,
   "chestCollectRadius": 0.75,
+  "mineCaptureGiveUpSeconds": 3,
+  "mineCaptureRetrySeconds": 6,
+  "maxUnitLevel": 15,
+  "levelStatBonusPerLevel": 0.06,
   "tuningPlaceholders": [
     "goldBaseIncomePerSecond",
     "goldStartingAmount",
@@ -39,6 +43,10 @@
     "chestFirstSpawnSeconds",
     "chestSpawnIntervalSeconds",
     "chestGold",
-    "chestCollectRadius"
+    "chestCollectRadius",
+    "mineCaptureGiveUpSeconds",
+    "mineCaptureRetrySeconds",
+    "maxUnitLevel",
+    "levelStatBonusPerLevel"
   ]
 }

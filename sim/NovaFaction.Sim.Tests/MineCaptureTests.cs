@@ -226,19 +226,101 @@ public class MineCaptureTests
     }
 
     [Fact]
-    public void Capturer_IgnoresEnemiesItCannotHit()
+    public void Capturer_IgnoresEnemiesItCannotHit_ThenGivesUpWhenTheCaptureStalls()
     {
-        // A flying enemy over the mine cannot be hit by a ground-only knight: the knight keeps capturing, and the
-        // mine stays contested (paused).
+        // A flying enemy over the mine cannot be hit by a ground-only knight: the knight keeps capturing while the
+        // mine is contested (paused). After 3 s (60 ticks) without progress it gives up, ignores mines for 6 s and
+        // walks on toward its objective.
         Simulation sim = CaptureSim();
         MineState mine = sim.State.Mines[MineWest];
+        Assert.Equal(60, sim.Rules.MineCaptureGiveUpTicks);
+        Assert.Equal(120, sim.Rules.MineCaptureRetryTicks);
         Unit knight = Place(sim, 0, "knight", "4.5", "15.5");
         TestSim.Run(sim, 10);
+        Assert.Equal(0, knight.CaptureStallTicks); // progress moved every tick
         Place(sim, 1, "balloon", "5.5", "15.5");
-        TestSim.Run(sim, 100);
+
+        TestSim.Run(sim, 59); // ticks 10..68: contested
         Assert.Equal(UnitState.Capturing, knight.State);
+        Assert.Equal(59, knight.CaptureStallTicks);
         Assert.Equal(10, mine.CaptureProgressTicks);
-        Assert.Equal(MineState.Nobody, mine.Owner);
+        Assert.Equal(0, knight.IgnoreMinesUntilTick);
+
+        Step(sim); // tick 69: the 60th stalled tick
+        Assert.Equal(0, knight.CaptureStallTicks);
+        Assert.Equal(69 + 1 + 120, knight.IgnoreMinesUntilTick);
+        Assert.Equal(TestSim.V("4.5", "15.5"), knight.Position);
+
+        Step(sim); // tick 70: it walks on
+        Assert.Equal(UnitState.Moving, knight.State);
+        StepUntil(sim, () => knight.State == UnitState.Attacking, 400, "reaching tower_1_west");
+        Assert.Equal(TargetRef.Structure(Tower1West), knight.Target);
+
+        // With the knight gone, the flyer is alone at the mine: it undoes the knight's progress and takes the mine.
+        StepUntil(sim, () => mine.Owner == 1, 200, "the flyer taking the mine");
+    }
+
+    [Fact]
+    public void GiveUpAndRetry_HappenExactlyOnTime()
+    {
+        // A capturer that cannot move (the dummy) next to a mine contested by an enemy flyer it cannot hit: it stalls
+        // for 60 ticks, ignores mines for the next 120, captures (and stalls) again, and so on.
+        Simulation sim = CaptureSim();
+        MineState mine = sim.State.Mines[MineWest];
+        Unit dummy = Place(sim, 0, "dummy", "4.5", "15.5");
+        Assert.True(dummy.Definition.CanCapture);
+        Place(sim, 1, "balloon", "5.5", "15.5");
+
+        var capturingTicks = new List<int>();
+        for (int t = 0; t < 400; t++)
+        {
+            Step(sim); // runs tick t
+            if (dummy.State == UnitState.Capturing)
+            {
+                capturingTicks.Add(t);
+            }
+            else
+            {
+                Assert.Equal(UnitState.Moving, dummy.State); // heading for its objective at speed 0
+                Assert.True(dummy.IgnoresMines(t), "tick " + t);
+            }
+            Assert.Equal(0, mine.CaptureProgressTicks); // contested throughout
+        }
+        // Capturing on ticks 0-59 (gives up on 59), ignoring 60-179, capturing 180-239 (gives up on 239), ignoring
+        // 240-359, capturing from 360.
+        var expected = Enumerable.Range(0, 60).Concat(Enumerable.Range(180, 60)).Concat(Enumerable.Range(360, 40));
+        Assert.Equal(expected, capturingTicks);
+        Assert.Equal(360, dummy.IgnoreMinesUntilTick);
+        Assert.Equal(40, dummy.CaptureStallTicks);
+    }
+
+    [Fact]
+    public void StallCount_ResetsWhenTheCaptureMovesAgain_OrTheUnitStopsCapturing()
+    {
+        Simulation sim = CaptureSim();
+        MineState mine = sim.State.Mines[MineWest];
+        Unit dummy = Place(sim, 0, "dummy", "4.5", "15.5");
+        Unit balloon = Place(sim, 1, "balloon", "5.5", "15.5");
+        TestSim.Run(sim, 50);
+        Assert.Equal(50, dummy.CaptureStallTicks);
+
+        // The flyer leaves (removed here): the capture moves again and the stall count starts over.
+        sim.State.UnitList.Remove(balloon);
+        Step(sim);
+        Assert.Equal(1, mine.CaptureProgressTicks);
+        Assert.Equal(0, dummy.CaptureStallTicks);
+
+        // Contested again for 30 ticks, then an enemy it can fight turns up: fighting is not capturing, so the count
+        // is 0 again, and it needs a fresh 60 stalled ticks afterwards.
+        Place(sim, 1, "balloon", "5.5", "15.5");
+        TestSim.Run(sim, 30);
+        Assert.Equal(30, dummy.CaptureStallTicks);
+        Unit enemy = Place(sim, 1, "fragile", "4.5", "15.9");
+        Step(sim);
+        Assert.Equal(UnitState.Attacking, dummy.State); // it fights (with 0 damage, forever)
+        Assert.Equal(TargetRef.Unit(enemy.Id), dummy.Target);
+        Assert.Equal(0, dummy.CaptureStallTicks);
+        Assert.Equal(0, dummy.IgnoreMinesUntilTick);
     }
 
     [Fact]

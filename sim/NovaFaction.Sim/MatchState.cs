@@ -24,12 +24,13 @@ namespace NovaFaction.Sim
     /// <summary>Per-player match state.</summary>
     public sealed class PlayerState : IStateHashable
     {
-        internal PlayerState(int index, Fix startingGold, Deck deck, int handSize, SimRandom random)
+        internal PlayerState(int index, Fix startingGold, Deck deck, int handSize, SimRandom random, int structureLevel)
         {
             Index = index;
             Gold = startingGold;
             Deck = deck;
             Cards = new CardCycle(deck, handSize, random);
+            StructureLevel = structureLevel;
         }
 
         /// <summary>0 or 1.</summary>
@@ -69,8 +70,23 @@ namespace NovaFaction.Sim
         /// </summary>
         public int IgnoredDeploys { get; internal set; }
 
-        /// <summary>The deck this player brought (sorted card list and faction).</summary>
+        /// <summary>
+        /// LeaderAbility commands rejected by game rules (no living leader, target out of range, cooldown, no ability).
+        /// Like <see cref="IgnoredDeploys"/>, this makes rejections visible in the state hash.
+        /// </summary>
+        public int IgnoredAbilities { get; internal set; }
+
+        /// <summary>The first tick the leader ability may be used on again (0 = ready from the start).</summary>
+        public int AbilityReadyTick { get; internal set; }
+
+        /// <summary>The deck this player brought (sorted card list with levels, and faction).</summary>
         public Deck Deck { get; }
+
+        /// <summary>The deck leader's passive: applies to all of this player's units all match.</summary>
+        public IReadOnlyList<Modifier> Passive => Deck.Leader.Passive;
+
+        /// <summary>This player's structure level (scales their Keep and towers).</summary>
+        public int StructureLevel { get; }
 
         /// <summary>Hand, next card and draw queue.</summary>
         public CardCycle Cards { get; }
@@ -85,7 +101,15 @@ namespace NovaFaction.Sim
             hasher.Add(GoldFromMap);
             hasher.Add(CommandsReceived);
             hasher.Add(IgnoredDeploys);
+            hasher.Add(IgnoredAbilities);
+            hasher.Add(AbilityReadyTick);
             hasher.Add(Deck.Catalog.ContentHash);
+            hasher.Add(Deck.Levels.Count);
+            foreach (int level in Deck.Levels) // deck (sorted id) order
+            {
+                hasher.Add(level);
+            }
+            hasher.Add(StructureLevel);
             hasher.AddHashable(Cards);
         }
     }
@@ -103,7 +127,10 @@ namespace NovaFaction.Sim
         // cooldowns, and projectiles.
         // Version 5 added map gold: mine income carry, gold from map, mines and chests.
         // Version 6 added spells (card catalog hash, pending spells, spell zones) and the Capturing unit state.
-        public const int HashFormatVersion = 6;
+        // Version 7 added levels and leaders: ignored abilities, ability cooldown, deck levels and structure level per
+        // player; unit level, effective stats, Rally buff, capture stall and mine-ignore tick; pending spawn level;
+        // spell damage.
+        public const int HashFormatVersion = 7;
 
         /// <summary><see cref="Winner"/> value while nobody has won.</summary>
         public const int NoWinner = -1;
@@ -121,6 +148,7 @@ namespace NovaFaction.Sim
         internal MatchState(ulong seed, MatchSetup setup)
         {
             MatchRules rules = setup.Rules;
+            Rules = rules;
             Map = new MapState(setup.Map);
             Random = new SimRandom(seed);
             ClockRemainingTicks = rules.MatchLengthTicks;
@@ -128,8 +156,10 @@ namespace NovaFaction.Sim
             // Player 0's cycle is shuffled first, then player 1's, both from the match RNG.
             _players = new[]
             {
-                new PlayerState(0, rules.GoldStartingAmount, setup.GetDeck(0), rules.HandSize, Random),
-                new PlayerState(1, rules.GoldStartingAmount, setup.GetDeck(1), rules.HandSize, Random),
+                new PlayerState(0, rules.GoldStartingAmount, setup.GetDeck(0), rules.HandSize, Random,
+                    setup.GetStructureLevel(0)),
+                new PlayerState(1, rules.GoldStartingAmount, setup.GetDeck(1), rules.HandSize, Random,
+                    setup.GetStructureLevel(1)),
             };
             NextUnitId = 1;
             NextProjectileId = 1;
@@ -139,7 +169,8 @@ namespace NovaFaction.Sim
             _structures = new StructureState[setup.Map.Structures.Count];
             foreach (StructureDefinition s in setup.Map.Structures)
             {
-                _structures[s.Index] = new StructureState(s, setup.Structures.Get(s.Kind), Map.Grid);
+                _structures[s.Index] = new StructureState(s, setup.Structures.Get(s.Kind), Map.Grid,
+                    rules.LevelFactor(setup.GetStructureLevel(s.Owner)));
             }
             _mines = MapGoldSystem.CreateMines(setup.Map, Map.Grid, rules);
             _chests = MapGoldSystem.CreateChests(setup.Map, Map.Grid);
@@ -150,6 +181,14 @@ namespace NovaFaction.Sim
         public int Tick { get; internal set; }
 
         public SimRandom Random { get; }
+
+        internal MatchRules Rules { get; }
+
+        /// <summary>
+        /// Leader AreaDamage casts applied this tick, consumed by this tick's combat. Always empty between ticks, so
+        /// not part of the hash.
+        /// </summary>
+        internal List<AbilityStrike> AbilityStrikes { get; } = new List<AbilityStrike>();
 
         /// <summary>The battlefield: terrain, structures, deploy zones, flow fields.</summary>
         public MapState Map { get; }
@@ -248,9 +287,11 @@ namespace NovaFaction.Sim
             return -1;
         }
 
-        internal Unit AddUnit(int owner, UnitDefinition definition, FixVector2 position)
+        /// <summary>Creates a unit at the given card level with its owner's leader passive applied.</summary>
+        internal Unit AddUnit(int owner, UnitDefinition definition, FixVector2 position, int level = 1)
         {
-            var unit = new Unit(NextUnitId++, owner, definition, position);
+            var unit = new Unit(NextUnitId++, owner, definition, position, level, Rules.LevelFactor(level),
+                GetPlayer(owner).Passive);
             _units.Add(unit); // ids only grow, so the list stays sorted
             return unit;
         }

@@ -94,13 +94,14 @@ public class DeckTests
     {
         MatchRules rules = MatchRulesTests.LoadShippedRules();
         // Half a cell (0.5) per tick at 20 ticks/s = 10 units/s, including the 1.5 separation push times (2 + 0.3): moving push, weak stopped push and sideways slide.
-        // goblin_pack and griffin both move at 1.5; goblin_pack comes first in the deck's id order.
-        UnitRoster fast = UnitRoster.FromJson(TestSim.FantasyUnitsJson().Replace("\"moveSpeed\": 1.5,", "\"moveSpeed\": 6.56,"));
+        // That leaves 6.55 for the unit itself, at its fastest: the deck's Warlord War Cry adds 20% speed, so the base
+        // limit is about 5.458. goblin_pack and griffin both move at 1.5; goblin_pack comes first in the deck's id order.
+        UnitRoster fast = UnitRoster.FromJson(TestSim.FantasyUnitsJson().Replace("\"moveSpeed\": 1.5,", "\"moveSpeed\": 5.46,"));
         Deck deck = Deck.Create(TestSim.Cards(fast), TestSim.DefaultDeckIds, 8);
         var ex = Assert.Throws<ArgumentException>(() => new MatchSetup(rules, MapTestData.LoadTwoLane(), TestSim.LoadStructures(), deck, deck));
         Assert.Contains("goblin_pack", ex.Message);
 
-        UnitRoster ok = UnitRoster.FromJson(TestSim.FantasyUnitsJson().Replace("\"moveSpeed\": 1.5,", "\"moveSpeed\": 6.54,"));
+        UnitRoster ok = UnitRoster.FromJson(TestSim.FantasyUnitsJson().Replace("\"moveSpeed\": 1.5,", "\"moveSpeed\": 5.45,"));
         Deck okDeck = Deck.Create(TestSim.Cards(ok), TestSim.DefaultDeckIds, 8);
         _ = new MatchSetup(rules, MapTestData.LoadTwoLane(), TestSim.LoadStructures(), okDeck, okDeck);
     }

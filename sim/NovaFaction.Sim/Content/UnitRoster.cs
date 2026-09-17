@@ -40,12 +40,16 @@ namespace NovaFaction.Sim.Content
     /// <summary>One unit card from a faction's units.json. Immutable.</summary>
     public sealed class UnitDefinition : CardDefinition
     {
+        private readonly Modifier[] _passive;
+
         internal UnitDefinition(int index, string id, string displayName, UnitSlot slot, int cost, Fix hp, Fix damage,
             Fix attackIntervalSeconds, Fix range, Fix moveSpeed, TargetLayer targets, TargetPriority targetPriority,
             bool isFlying, int spawnCount, Fix projectileSpeed, Fix splashRadius, bool isLeader, bool canCapture,
-            bool isPlaceholder)
+            bool isPlaceholder, Modifier[]? passive = null, LeaderAbilityDefinition? ability = null)
             : base(index, id, displayName, cost, isPlaceholder)
         {
+            _passive = passive ?? Array.Empty<Modifier>();
+            Ability = ability;
             Slot = slot;
             Hp = hp;
             Damage = damage;
@@ -113,6 +117,15 @@ namespace NovaFaction.Sim.Content
         /// </summary>
         public bool CanCapture { get; }
 
+        /// <summary>
+        /// Leaders only: the faction passive, applied to all of the owner's units for the whole match whether or not
+        /// the leader is on the field. Empty for other units.
+        /// </summary>
+        public IReadOnlyList<Modifier> Passive => _passive;
+
+        /// <summary>Leaders only: the active ability used with the LeaderAbility command, or null.</summary>
+        public LeaderAbilityDefinition? Ability { get; }
+
         internal override void AppendHash(ref StateHasher h)
         {
             h.Add(Id);
@@ -132,6 +145,9 @@ namespace NovaFaction.Sim.Content
             h.Add(SplashRadius);
             h.Add(IsLeader);
             h.Add(CanCapture);
+            Modifier.AppendHash(ref h, _passive);
+            h.Add(Ability != null);
+            Ability?.AppendHash(ref h);
         }
     }
 
@@ -157,12 +173,17 @@ namespace NovaFaction.Sim.Content
         private const string KeyProjectileSpeed = "projectileSpeed";
         private const string KeySplashRadius = "splashRadius";
         private const string KeyCanCapture = "canCapture";
+        private const string KeyPassive = "passive";
+        private const string KeyAbility = "ability";
         private static readonly string[] UnitKeys =
         {
             "id", "displayName", "slot", "cost", "hp", "damage", "attackIntervalSeconds", "range", "moveSpeed",
             "targets", "targetPriority", "isFlying", "spawnCount", "isLeader",
         };
-        private static readonly string[] OptionalUnitKeys = { KeyPlaceholder, KeyProjectileSpeed, KeySplashRadius, KeyCanCapture };
+        private static readonly string[] OptionalUnitKeys =
+        {
+            KeyPlaceholder, KeyProjectileSpeed, KeySplashRadius, KeyCanCapture, KeyPassive, KeyAbility,
+        };
 
         private static readonly string[] SlotNames =
             { "tank", "bruiser", "swarm", "ranged", "flyer", "siege", "support", "spell", "building", "leader" };
@@ -318,9 +339,30 @@ namespace NovaFaction.Sim.Content
                 }
             }
 
+            // The faction passive and the active ability belong to leaders only; both are optional.
+            Modifier[]? passive = null;
+            if (item.TryGet(KeyPassive, out JsonValue passiveValue))
+            {
+                if (!isLeader)
+                {
+                    throw passiveValue.Error(what + "only a leader may have a passive.");
+                }
+                passive = Modifier.ReadList(passiveValue, what + "passive: ");
+            }
+            LeaderAbilityDefinition? ability = null;
+            if (item.TryGet(KeyAbility, out JsonValue abilityValue))
+            {
+                if (!isLeader)
+                {
+                    throw abilityValue.Error(what + "only a leader may have an ability.");
+                }
+                ability = LeaderAbilityDefinition.Read(abilityValue, what);
+            }
+
             bool placeholder = item.TryGet(KeyPlaceholder, out JsonValue p) && p.AsBool();
             return new UnitDefinition(index, id, displayName, slot, cost, hp, damage, interval, range, moveSpeed,
-                targets, priority, isFlying, spawnCount, projectileSpeed, splashRadius, isLeader, canCapture, placeholder);
+                targets, priority, isFlying, spawnCount, projectileSpeed, splashRadius, isLeader, canCapture, placeholder,
+                passive, ability);
         }
 
         internal static int ReadCost(JsonValue item, string what)

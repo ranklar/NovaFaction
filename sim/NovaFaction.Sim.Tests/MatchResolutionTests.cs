@@ -163,16 +163,16 @@ public class MatchResolutionTests
         Assert.Equal(MatchPhase.SuddenDeath, sim.State.Phase);
 
         // Player 1 hits a player 0 tower: the match ends on that tick.
-        Place(sim, 1, "goblin_pack", "4", "8.5");
+        Unit goblin = Place(sim, 1, "goblin_pack", "4", "8.5");
         int tick = sim.State.Tick;
         Step(sim);
         AssertEnded(sim, 1, EndReason.FirstDamage);
         Assert.Equal(tick + 1, sim.State.Tick);
-        Assert.Equal(Fix.FromInt(7) + Fix.FromInt(60), sim.State.GetPlayer(1).Score);
+        Assert.Equal(Fix.FromInt(7) + goblin.Damage, sim.State.GetPlayer(1).Score);
     }
 
     [Theory]
-    [InlineData("knight", "goblin_pack", 0)] // 140 vs 60 on the same tick: player 0 removed more
+    [InlineData("knight", "goblin_pack", 0)] // 154 vs 66 on the same tick: player 0 removed more
     [InlineData("goblin_pack", "knight", 1)]
     public void SuddenDeath_BothDamageOnTheSameTick_MoreDamageWins(string card0, string card1, int winner)
     {

@@ -53,6 +53,22 @@ namespace NovaFaction.Sim.Numerics
             return quotient;
         }
 
+        /// <summary>
+        /// a * b / divisor for non-negative values, rounded to nearest (ties up), computed exactly in 128 bits.
+        /// Precondition: the result fits in a long (e.g. a &lt;= divisor).
+        /// </summary>
+        public static long MulDivRound(long a, long b, long divisor)
+        {
+            Multiply((ulong)a, (ulong)b, out ulong hi, out ulong lo);
+            ulong half = (ulong)divisor >> 1;
+            ulong roundedLo = lo + half;
+            if (roundedLo < lo)
+            {
+                hi++;
+            }
+            return (long)DivRem(hi, roundedLo, (ulong)divisor, out _);
+        }
+
         /// <summary>Number of significant bits in <paramref name="value"/> (0 for 0).</summary>
         public static int BitLength(ulong value)
         {

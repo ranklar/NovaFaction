@@ -11,8 +11,10 @@ namespace NovaFaction.Sim.Spells
     public sealed class SpellInstance : IStateHashable
     {
         internal SpellInstance(int id, int owner, SpellDefinition definition, FixVector2 target, int landTick,
-            int durationTicks, int pulseIntervalTicks)
+            int durationTicks, int pulseIntervalTicks, Fix levelFactor)
         {
+            Damage = definition.Damage * levelFactor;
+            StructureDamage = Damage * definition.StructureDamageMultiplier;
             Id = id;
             Owner = owner;
             Definition = definition;
@@ -49,6 +51,12 @@ namespace NovaFaction.Sim.Spells
 
         public bool IsZone => EndTick > LandTick;
 
+        /// <summary>Damage per hit to each enemy unit: the spell's damage times the card's level factor.</summary>
+        public Fix Damage { get; }
+
+        /// <summary>Damage per hit to each enemy structure: <see cref="Damage"/> times the structure multiplier.</summary>
+        public Fix StructureDamage { get; }
+
         /// <summary>Whether a pulse is due on this tick.</summary>
         internal bool PulsesOn(int tick) =>
             tick >= LandTick && (tick == LandTick || (tick < EndTick && (tick - LandTick) % PulseIntervalTicks == 0));
@@ -62,6 +70,8 @@ namespace NovaFaction.Sim.Spells
             hasher.Add(LandTick);
             hasher.Add(EndTick);
             hasher.Add(PulseIntervalTicks);
+            hasher.Add(Damage);
+            hasher.Add(StructureDamage);
         }
     }
 }

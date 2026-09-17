@@ -12,7 +12,13 @@ internal static class TestSim
     /// <summary>The map gold keys of rules.json (fixed values), for tests that write rules inline.</summary>
     internal const string MapGoldRulesJson =
         ", \"mineCaptureRadius\": 1.5, \"mineCaptureSeconds\": 5, \"mineIncomePerSecond\": 0.05, \"mineIncomeCap\": 0.1"
-        + ", \"chestFirstSpawnSeconds\": 30, \"chestSpawnIntervalSeconds\": 30, \"chestGold\": 0.75, \"chestCollectRadius\": 0.75";
+        + ", \"chestFirstSpawnSeconds\": 30, \"chestSpawnIntervalSeconds\": 30, \"chestGold\": 0.75, \"chestCollectRadius\": 0.75"
+        + LevelRulesJson;
+
+    /// <summary>The capture give-up and level keys of rules.json (shipped values), for tests that write rules inline.</summary>
+    internal const string LevelRulesJson =
+        ", \"mineCaptureGiveUpSeconds\": 3, \"mineCaptureRetrySeconds\": 6, \"maxUnitLevel\": 15"
+        + ", \"levelStatBonusPerLevel\": 0.06";
 
     /// <summary>The movement, combat and map gold keys of rules.json, for tests that write rules inline.</summary>
     internal const string MovementRulesJson =
@@ -90,7 +96,8 @@ internal static class TestSim
         string separationDistance = "0.6", string push = "1.5", string spacing = "0.5", string stoppedPush = "0.3",
         string aggro = "5.5", string crowdPenalty = "1", string matchSeconds = "180", string suddenDeathSeconds = "60",
         string mineRadius = "1.5", string mineSeconds = "5", string mineIncome = "0.05", string mineCap = "0.1",
-        string chestFirst = "30", string chestInterval = "30", string chestGold = "0.75", string chestRadius = "0.75") =>
+        string chestFirst = "30", string chestInterval = "30", string chestGold = "0.75", string chestRadius = "0.75",
+        string giveUp = "3", string retry = "6", string maxLevel = "15", string levelBonus = "0.06") =>
         MatchRules.FromJson("{\"ticksPerSecond\": 20, \"matchLengthSeconds\": " + matchSeconds
             + ", \"suddenDeathSeconds\": " + suddenDeathSeconds + ", \"suddenDeathIncomeMultiplier\": 2, "
             + "\"goldBaseIncomePerSecond\": " + income + ", \"goldStartingAmount\": " + start + ", \"goldCap\": " + cap
@@ -101,7 +108,9 @@ internal static class TestSim
             + ", \"mineCaptureRadius\": " + mineRadius + ", \"mineCaptureSeconds\": " + mineSeconds
             + ", \"mineIncomePerSecond\": " + mineIncome + ", \"mineIncomeCap\": " + mineCap
             + ", \"chestFirstSpawnSeconds\": " + chestFirst + ", \"chestSpawnIntervalSeconds\": " + chestInterval
-            + ", \"chestGold\": " + chestGold + ", \"chestCollectRadius\": " + chestRadius + "}");
+            + ", \"chestGold\": " + chestGold + ", \"chestCollectRadius\": " + chestRadius
+            + ", \"mineCaptureGiveUpSeconds\": " + giveUp + ", \"mineCaptureRetrySeconds\": " + retry
+            + ", \"maxUnitLevel\": " + maxLevel + ", \"levelStatBonusPerLevel\": " + levelBonus + "}");
 
     internal static FixVector2 V(string x, string y) => new FixVector2(Fix.Parse(x), Fix.Parse(y));
 

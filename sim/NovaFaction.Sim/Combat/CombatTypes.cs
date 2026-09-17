@@ -75,12 +75,14 @@ namespace NovaFaction.Sim.Combat
 
         private readonly Grid _grid;
 
-        internal StructureState(StructureDefinition definition, StructureStats stats, Grid grid)
+        internal StructureState(StructureDefinition definition, StructureStats stats, Grid grid, Fix levelFactor)
         {
             Definition = definition;
             Stats = stats;
             _grid = grid;
-            Hp = stats.Hp;
+            MaxHp = stats.Hp * levelFactor;
+            Damage = stats.Damage * levelFactor;
+            Hp = MaxHp;
         }
 
         public int Index => Definition.Index;
@@ -89,7 +91,14 @@ namespace NovaFaction.Sim.Combat
 
         public StructureDefinition Definition { get; }
 
+        /// <summary>Base stats of the structure's kind (structures.json). Hp and Damage are scaled by the owner's level.</summary>
         public StructureStats Stats { get; }
+
+        /// <summary>Starting hit points: the kind's hp times the owner's structure level factor.</summary>
+        public Fix MaxHp { get; }
+
+        /// <summary>Damage per shot: the kind's damage times the owner's structure level factor.</summary>
+        public Fix Damage { get; }
 
         /// <summary>Current hit points; 0 once destroyed by damage.</summary>
         public Fix Hp { get; internal set; }
@@ -105,6 +114,8 @@ namespace NovaFaction.Sim.Combat
         public void AppendHash(ref StateHasher hasher)
         {
             hasher.Add(Definition.Index);
+            hasher.Add(MaxHp);
+            hasher.Add(Damage);
             hasher.Add(Hp);
             hasher.Add(AttackCooldownTicks);
             hasher.Add(TargetUnitId);
@@ -167,6 +178,16 @@ namespace NovaFaction.Sim.Combat
             hasher.Add(SplashRadius);
             hasher.Add((int)CanHit);
         }
+    }
+
+    /// <summary>A leader AreaDamage cast, resolved in the combat step of the tick it was used on.</summary>
+    internal struct AbilityStrike
+    {
+        public int Owner;
+        public FixVector2 Center;
+        public Fix Radius;
+        public Fix Damage;
+        public Fix StructureDamage;
     }
 
     /// <summary>Why the match ended.</summary>

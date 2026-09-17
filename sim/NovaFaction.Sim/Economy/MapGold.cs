@@ -97,16 +97,19 @@ namespace NovaFaction.Sim.Economy
     internal static class MapGoldSystem
     {
         /// <summary>
-        /// Updates mine capture, then collects chests. Chest gold is added at once, limited by the gold cap;
-        /// what was actually received also counts toward <see cref="PlayerState.GoldFromMap"/>.
+        /// Updates mine capture, then capture give-ups, then collects chests. Chest gold is added at once, limited by the
+        /// gold cap; what was actually received also counts toward <see cref="PlayerState.GoldFromMap"/>.
         /// </summary>
         internal static void Tick(MatchState state, MatchRules rules)
         {
             IReadOnlyList<Unit> units = state.Units;
-            foreach (MineState mine in state.Mines) // index order
+            IReadOnlyList<MineState> mines = state.Mines;
+            var advancedFor = new int[mines.Count];
+            foreach (MineState mine in mines) // index order
             {
-                UpdateMine(mine, units, rules);
+                advancedFor[mine.Index] = UpdateMine(mine, units, rules);
             }
+            UpdateGiveUps(state, rules, advancedFor);
             foreach (ChestState chest in state.Chests) // index order
             {
                 if (chest.IsPresent)
@@ -119,9 +122,11 @@ namespace NovaFaction.Sim.Economy
         /// <summary>
         /// Presence rules: one player alone moves progress toward their own capture (first undoing the other
         /// player's progress, if any); the owner alone and nobody at all both wind progress back toward 0; both
-        /// players present freezes it. Every change is one tick per tick.
+        /// players present freezes it. Every change is one tick per tick. Returns the player whose capture moved
+        /// forward this tick (their own progress grew, the capture completed, or the other player's progress was
+        /// unwound because they were alone), or <see cref="MineState.Nobody"/>.
         /// </summary>
-        private static void UpdateMine(MineState mine, IReadOnlyList<Unit> units, MatchRules rules)
+        private static int UpdateMine(MineState mine, IReadOnlyList<Unit> units, MatchRules rules)
         {
             bool present0 = false, present1 = false;
             foreach (Unit u in units)
@@ -134,18 +139,18 @@ namespace NovaFaction.Sim.Economy
             }
             if (present0 && present1)
             {
-                return; // contested: paused
+                return MineState.Nobody; // contested: paused
             }
             int alone = present0 ? 0 : present1 ? 1 : MineState.Nobody;
             if (alone == MineState.Nobody || alone == mine.Owner)
             {
                 Unwind(mine);
-                return;
+                return MineState.Nobody;
             }
             if (mine.CapturingPlayer != MineState.Nobody && mine.CapturingPlayer != alone)
             {
                 Unwind(mine); // the other player's progress must be undone first
-                return;
+                return alone;
             }
             mine.CapturingPlayer = alone;
             mine.CaptureProgressTicks++;
@@ -154,6 +159,47 @@ namespace NovaFaction.Sim.Economy
                 mine.Owner = alone;
                 mine.CapturingPlayer = MineState.Nobody;
                 mine.CaptureProgressTicks = 0;
+            }
+            return alone;
+        }
+
+        /// <summary>
+        /// A Capturing unit whose capture did not move forward this tick (no mine within the capture radius advanced for
+        /// its player) adds a stall tick; one whose capture advanced starts again from 0, and any unit that is not
+        /// Capturing is at 0. After mineCaptureGiveUpSeconds of stalling the unit gives up: it ignores mines for the next
+        /// mineCaptureRetrySeconds (from the next tick on) and so walks on toward its objective.
+        /// </summary>
+        private static void UpdateGiveUps(MatchState state, MatchRules rules, int[] advancedFor)
+        {
+            IReadOnlyList<MineState> mines = state.Mines;
+            foreach (Unit u in state.Units) // id order
+            {
+                if (u.State != UnitState.Capturing)
+                {
+                    u.CaptureStallTicks = 0;
+                    continue;
+                }
+                bool advanced = false;
+                foreach (MineState mine in mines)
+                {
+                    if (advancedFor[mine.Index] == u.Owner
+                        && FixVector2.Distance(u.Position, mine.Position) <= rules.MineCaptureRadius)
+                    {
+                        advanced = true;
+                        break;
+                    }
+                }
+                if (advanced)
+                {
+                    u.CaptureStallTicks = 0;
+                    continue;
+                }
+                u.CaptureStallTicks++;
+                if (u.CaptureStallTicks >= rules.MineCaptureGiveUpTicks)
+                {
+                    u.CaptureStallTicks = 0;
+                    u.IgnoreMinesUntilTick = state.Tick + 1 + rules.MineCaptureRetryTicks;
+                }
             }
         }
 

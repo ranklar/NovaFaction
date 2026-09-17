@@ -59,6 +59,7 @@ namespace NovaFaction.Sim.Combat
             ctx.DecideStructures();
             ctx.AdvanceProjectiles();
             ctx.ResolveSpells();
+            ctx.ResolveAbilityStrikes();
             ctx.Attack();
             ctx.ApplyHits(outcome);
             ctx.MoveUnits();
@@ -187,13 +188,13 @@ namespace NovaFaction.Sim.Combat
                     if (target.IsNone && def.CanCapture)
                     {
                         // No enemy to fight: a capturer next to a mine its player does not own stops (or stays) there.
-                        if (IsAtUncapturedMine(u.Owner, pos))
+                        if (!u.IgnoresMines(_state.Tick) && IsAtUncapturedMine(u.Owner, pos))
                         {
                             u.Target = TargetRef.None;
                             u.State = UnitState.Capturing;
                             return;
                         }
-                        _mayCapture[i] = true;
+                        _mayCapture[i] = !u.IgnoresMines(_state.Tick);
                     }
                     if (target.IsNone && u.Objective != Unit.NoObjective && TargetRules.CanHitStructures(def.Targets))
                     {
@@ -223,7 +224,7 @@ namespace NovaFaction.Sim.Combat
 
                 u.State = UnitState.Moving;
                 FixVector2 heading = Direction(i, destination);
-                _velocity[i] = heading * def.MoveSpeed
+                _velocity[i] = heading * u.MoveSpeed
                     + UnitMovement.SeparationPush(_units, _start, _stopped, i, _rules, heading);
                 _moving[i] = true;
             }
@@ -281,7 +282,7 @@ namespace NovaFaction.Sim.Combat
                 }
             }
 
-            private Fix ScanRadius(Unit u) => Fix.Max(_rules.AggroRadius, u.Definition.Range);
+            private Fix ScanRadius(Unit u) => Fix.Max(_rules.AggroRadius, u.Range);
 
             /// <summary>
             /// A ground attacker can go after an enemy unit that is already in range, or that stands on a walkable
@@ -290,7 +291,7 @@ namespace NovaFaction.Sim.Combat
             private bool CanPursue(int i, int k, Fix distance)
             {
                 Unit u = _units[i];
-                if (u.IsFlying || distance <= u.Definition.Range)
+                if (u.IsFlying || distance <= u.Range)
                 {
                     return true;
                 }
@@ -366,7 +367,7 @@ namespace NovaFaction.Sim.Combat
 
             private bool IsInRange(int i, FixVector2 position, TargetRef target)
             {
-                Fix range = _units[i].Definition.Range;
+                Fix range = _units[i].Range;
                 if (target.Kind == TargetKind.Structure)
                 {
                     return UnitMovement.DistanceToFootprint(_grid, position, target.Id) <= range;
@@ -559,11 +560,30 @@ namespace NovaFaction.Sim.Combat
                     Owner = spell.Owner,
                     Target = TargetRef.None,
                     Impact = spell.Target,
-                    Damage = def.Damage,
-                    StructureDamage = def.StructureDamage,
+                    Damage = spell.Damage,
+                    StructureDamage = spell.StructureDamage,
                     SplashRadius = def.Radius,
                     CanHit = def.Targets,
                 });
+            }
+
+            /// <summary>Leader AreaDamage casts from this tick's commands hit like an instant spell of both layers.</summary>
+            public void ResolveAbilityStrikes()
+            {
+                foreach (AbilityStrike strike in _state.AbilityStrikes)
+                {
+                    _hits.Add(new Hit
+                    {
+                        Owner = strike.Owner,
+                        Target = TargetRef.None,
+                        Impact = strike.Center,
+                        Damage = strike.Damage,
+                        StructureDamage = strike.StructureDamage,
+                        SplashRadius = strike.Radius,
+                        CanHit = TargetLayer.Both,
+                    });
+                }
+                _state.AbilityStrikes.Clear();
             }
 
             public void Attack()
@@ -577,11 +597,11 @@ namespace NovaFaction.Sim.Combat
                     }
                     Unit u = _units[i];
                     UnitDefinition def = u.Definition;
-                    u.AttackCooldownTicks = TargetRules.IntervalTicks(def.AttackIntervalSeconds, tps);
+                    u.AttackCooldownTicks = TargetRules.IntervalTicks(u.AttackIntervalSeconds, tps);
                     FixVector2 aim = AimPoint(_start[i], u.Target);
                     if (def.IsRanged)
                     {
-                        Fire(u.Owner, _start[i], u.Target, aim, def.ProjectileSpeed, def.Damage, def.SplashRadius, def.Targets);
+                        Fire(u.Owner, _start[i], u.Target, aim, def.ProjectileSpeed, u.Damage, def.SplashRadius, def.Targets);
                     }
                     else
                     {
@@ -590,8 +610,8 @@ namespace NovaFaction.Sim.Combat
                             Owner = u.Owner,
                             Target = u.Target,
                             Impact = aim,
-                            Damage = def.Damage,
-                            StructureDamage = def.Damage,
+                            Damage = u.Damage,
+                            StructureDamage = u.Damage,
                             SplashRadius = def.SplashRadius,
                             CanHit = def.Targets,
                         });
@@ -608,7 +628,7 @@ namespace NovaFaction.Sim.Combat
                     s.AttackCooldownTicks = TargetRules.IntervalTicks(stats.AttackIntervalSeconds, tps);
                     TargetRef target = TargetRef.Unit(s.TargetUnitId);
                     FixVector2 from = UnitMovement.FootprintCenter(_grid, s.Index);
-                    Fire(s.Owner, from, target, AimPoint(from, target), stats.ProjectileSpeed, stats.Damage, Fix.Zero,
+                    Fire(s.Owner, from, target, AimPoint(from, target), stats.ProjectileSpeed, s.Damage, Fix.Zero,
                         stats.Targets);
                 }
             }
@@ -731,7 +751,7 @@ namespace NovaFaction.Sim.Combat
                     }
                     else
                     {
-                        FixVector2 flowOnly = _flow[i]!.GetDirection(_start[i]) * u.Definition.MoveSpeed;
+                        FixVector2 flowOnly = _flow[i]!.GetDirection(_start[i]) * u.MoveSpeed;
                         u.Position = UnitMovement.GroundStep(_grid, _start[i], step,
                             UnitMovement.PerTick(flowOnly, _ticksPerSecond));
                     }

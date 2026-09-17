@@ -30,7 +30,11 @@ public class MatchRulesTests
   ""chestFirstSpawnSeconds"": 30,
   ""chestSpawnIntervalSeconds"": 30,
   ""chestGold"": 0.75,
-  ""chestCollectRadius"": 0.75
+  ""chestCollectRadius"": 0.75,
+  ""mineCaptureGiveUpSeconds"": 3,
+  ""mineCaptureRetrySeconds"": 6,
+  ""maxUnitLevel"": 15,
+  ""levelStatBonusPerLevel"": 0.06
 }".Replace("\r\n", "\n");
 
     internal static string ContentPath(string fileName) =>
@@ -67,7 +71,14 @@ public class MatchRulesTests
             "aggroRadius", "meleeTargetCrowdPenalty",
             "mineCaptureRadius", "mineCaptureSeconds", "mineIncomePerSecond", "mineIncomeCap",
             "chestFirstSpawnSeconds", "chestSpawnIntervalSeconds", "chestGold", "chestCollectRadius",
+            "mineCaptureGiveUpSeconds", "mineCaptureRetrySeconds", "maxUnitLevel", "levelStatBonusPerLevel",
         }, rules.TuningPlaceholders);
+
+        // Capture give-up and levels.
+        Assert.Equal(60, rules.MineCaptureGiveUpTicks);
+        Assert.Equal(120, rules.MineCaptureRetryTicks);
+        Assert.Equal(15, rules.MaxUnitLevel);
+        Assert.Equal(Fix.Parse("0.06"), rules.LevelStatBonusPerLevel);
 
         // Map gold: tick conversions and the cross-field limits hold for the shipped values.
         Assert.Equal(80, rules.MineCaptureTicks);
@@ -126,6 +137,10 @@ public class MatchRulesTests
     [InlineData("chestSpawnIntervalSeconds")]
     [InlineData("chestGold")]
     [InlineData("chestCollectRadius")]
+    [InlineData("mineCaptureGiveUpSeconds")]
+    [InlineData("mineCaptureRetrySeconds")]
+    [InlineData("maxUnitLevel")]
+    [InlineData("levelStatBonusPerLevel")]
     public void MissingKey_IsRejected(string key)
     {
         string json = string.Join("\n", ValidJson.Split('\n').Where(line => !line.Contains("\"" + key + "\"")));
@@ -176,6 +191,14 @@ public class MatchRulesTests
     [InlineData("\"chestGold\": 0.75", "\"chestGold\": 11", "chestGold must not exceed goldCap")]
     [InlineData("\"chestCollectRadius\": 0.75", "\"chestCollectRadius\": 0", "at least")]
     [InlineData("\"chestCollectRadius\": 0.75", "\"chestCollectRadius\": 64.5", "at most 64")]
+    [InlineData("\"mineCaptureGiveUpSeconds\": 3", "\"mineCaptureGiveUpSeconds\": 0", "at least")]
+    [InlineData("\"mineCaptureGiveUpSeconds\": 3", "\"mineCaptureGiveUpSeconds\": 3.01", "whole number of ticks")]
+    [InlineData("\"mineCaptureRetrySeconds\": 6", "\"mineCaptureRetrySeconds\": -1", "at least")]
+    [InlineData("\"mineCaptureRetrySeconds\": 6", "\"mineCaptureRetrySeconds\": 6.01", "whole number of ticks")]
+    [InlineData("\"maxUnitLevel\": 15", "\"maxUnitLevel\": 0", "between 1 and")]
+    [InlineData("\"maxUnitLevel\": 15", "\"maxUnitLevel\": 1.5", "whole number")]
+    [InlineData("\"levelStatBonusPerLevel\": 0.06", "\"levelStatBonusPerLevel\": -0.01", "at least")]
+    [InlineData("\"levelStatBonusPerLevel\": 0.06", "\"levelStatBonusPerLevel\": 1.5", "at most 1")]
     public void InvalidValues_AreRejected(string original, string replacement, string fragment)
     {
         Assert.Contains(original, ValidJson);

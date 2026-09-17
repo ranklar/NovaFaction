@@ -45,11 +45,11 @@ namespace NovaFaction.Sim
         /// <summary>
         /// Advances one tick. Every command must be stamped with <c>State.Tick</c> and be well-formed
         /// (see <see cref="Command.Validate"/>); otherwise this throws and the state is unchanged.
-        /// Order of work: apply commands (canonical order), create units of zero-delay deploys, run combat,
-        /// spells and movement (<see cref="BattleSystem"/>), resolve Keep kills and sudden-death damage, update mine
-        /// capture and collect chests (<see cref="MapGoldSystem"/>), accrue income (base and mines), advance the
-        /// tick and clock, then (unless the match just ended) create units whose spawn delay is over, spawn a due
-        /// chest wave and handle clock expiry. A deploy on tick N with a delay of D ticks therefore creates its
+        /// Order of work: apply commands (canonical order; leader abilities act here), create units of zero-delay
+        /// deploys, run combat, spells and movement (<see cref="BattleSystem"/>), resolve Keep kills and sudden-death
+        /// damage, update mine capture, capture give-ups and chests (<see cref="MapGoldSystem"/>), accrue income (base
+        /// and mines), advance the tick and clock, remove expired Rally buffs, then (unless the match just ended)
+        /// create units whose spawn delay is over, spawn a due chest wave and handle clock expiry. A deploy on tick N with a delay of D ticks therefore creates its
         /// units at time N + D: for D &gt; 0 they are in the state once <c>State.Tick</c> reaches N + D
         /// and have not moved yet; for D = 0 they appear during tick N and already move on it.
         /// </summary>
@@ -93,6 +93,7 @@ namespace NovaFaction.Sim
 
             State.Tick++;
             State.ClockRemainingTicks--;
+            ExpireBuffs();
             if (IsEnded)
             {
                 return;
@@ -132,7 +133,7 @@ namespace NovaFaction.Sim
                     DeployCard(player, command);
                     break;
                 case CommandType.LeaderAbility:
-                    // TODO(M1 leaders): check leader is deployed and ability is off cooldown.
+                    UseLeaderAbility(player, command.Target);
                     break;
             }
         }
@@ -156,16 +157,98 @@ namespace NovaFaction.Sim
             }
             player.Gold -= Fix.FromInt(card.Cost);
             player.Cards.Play(command.HandSlot);
+            int level = player.Deck.GetLevel(card);
             if (card is SpellDefinition spell)
             {
                 int pulse = spell.IsZone ? Rules.SecondsToTicks(spell.ZoneTickSeconds) : 0;
                 State.PendingSpellList.Add(new SpellInstance(State.NextSpellId++, player.Index, spell, command.Target,
                     State.Tick + Rules.SecondsToTicks(spell.CastDelaySeconds), Rules.SecondsToTicks(spell.DurationSeconds),
-                    pulse)); // ids only grow, so the list stays sorted
+                    pulse, Rules.LevelFactor(level))); // ids only grow, so the list stays sorted
                 return;
             }
             State.PendingSpawnList.Add(new PendingSpawn(State.Tick + Rules.DeploySpawnDelayTicks, player.Index,
-                (UnitDefinition)card, command.Target));
+                (UnitDefinition)card, command.Target, level));
+        }
+
+        /// <summary>
+        /// The leader ability is used when the player's leader has an ability, a living leader of that player is on the
+        /// field (Spawning counts) with the target within the ability's range of its center, and the cooldown is over.
+        /// Otherwise the command only bumps <see cref="PlayerState.IgnoredAbilities"/>. Heal and Rally act at once, on
+        /// units whose center is within the radius of the target now; AreaDamage hits in this tick's combat step.
+        /// Ability amounts scale with the leader card's level.
+        /// </summary>
+        private void UseLeaderAbility(PlayerState player, FixVector2 target)
+        {
+            UnitDefinition leader = player.Deck.Leader;
+            LeaderAbilityDefinition? ability = leader.Ability;
+            if (ability == null || State.Tick < player.AbilityReadyTick || !LeaderInRange(player.Index, target, ability.Range))
+            {
+                player.IgnoredAbilities++;
+                return;
+            }
+            player.AbilityReadyTick = State.Tick + Rules.SecondsToTicks(ability.CooldownSeconds);
+            Fix amount = ability.Amount * Rules.LevelFactor(player.Deck.LeaderLevel);
+            switch (ability.Type)
+            {
+                case AbilityType.AreaDamage:
+                    State.AbilityStrikes.Add(new AbilityStrike
+                    {
+                        Owner = player.Index,
+                        Center = target,
+                        Radius = ability.Radius,
+                        Damage = amount,
+                        StructureDamage = amount * ability.StructureDamageMultiplier,
+                    });
+                    break;
+                case AbilityType.Rally:
+                    var buff = new TimedBuff(ability.Modifiers, State.Tick + Rules.SecondsToTicks(ability.DurationSeconds));
+                    foreach (Unit unit in FriendlyUnitsAround(player.Index, target, ability.Radius))
+                    {
+                        unit.SetBuff(buff); // replaces an earlier Rally: buffs never stack
+                    }
+                    break;
+                case AbilityType.Heal:
+                    foreach (Unit unit in FriendlyUnitsAround(player.Index, target, ability.Radius))
+                    {
+                        unit.Heal(amount);
+                    }
+                    break;
+            }
+        }
+
+        private bool LeaderInRange(int player, FixVector2 target, Fix range)
+        {
+            foreach (Unit unit in State.Units)
+            {
+                if (unit.Owner == player && unit.Definition.IsLeader && unit.IsAlive
+                    && FixVector2.Distance(unit.Position, target) <= range)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private List<Unit> FriendlyUnitsAround(int player, FixVector2 center, Fix radius)
+        {
+            var result = new List<Unit>();
+            foreach (Unit unit in State.Units) // id order
+            {
+                if (unit.Owner == player && unit.IsAlive && FixVector2.Distance(unit.Position, center) <= radius)
+                {
+                    result.Add(unit);
+                }
+            }
+            return result;
+        }
+
+        /// <summary>Removes every Rally buff whose time is up, restoring the units' stats.</summary>
+        private void ExpireBuffs()
+        {
+            foreach (Unit unit in State.Units)
+            {
+                unit.ExpireBuff(State.Tick);
+            }
         }
 
         /// <summary>Inside the map rectangle (blocked cells and structures included).</summary>
@@ -193,7 +276,7 @@ namespace NovaFaction.Sim
                     spawn.Definition.SpawnCount, Rules.UnitSpawnSpacing);
                 foreach (FixVector2 position in positions)
                 {
-                    State.AddUnit(spawn.Owner, spawn.Definition, position);
+                    State.AddUnit(spawn.Owner, spawn.Definition, position, spawn.Level);
                 }
             }
             pending.RemoveRange(kept, pending.Count - kept);

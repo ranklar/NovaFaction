@@ -41,6 +41,10 @@ namespace NovaFaction.Sim.Content
         private const string KeyChestSpawnIntervalSeconds = "chestSpawnIntervalSeconds";
         private const string KeyChestGold = "chestGold";
         private const string KeyChestCollectRadius = "chestCollectRadius";
+        private const string KeyMineCaptureGiveUpSeconds = "mineCaptureGiveUpSeconds";
+        private const string KeyMineCaptureRetrySeconds = "mineCaptureRetrySeconds";
+        private const string KeyMaxUnitLevel = "maxUnitLevel";
+        private const string KeyLevelStatBonusPerLevel = "levelStatBonusPerLevel";
         private const string KeyTuningPlaceholders = "tuningPlaceholders";
 
         private static readonly string[] RequiredKeys =
@@ -52,6 +56,7 @@ namespace NovaFaction.Sim.Content
             KeyAggroRadius, KeyMeleeTargetCrowdPenalty,
             KeyMineCaptureRadius, KeyMineCaptureSeconds, KeyMineIncomePerSecond, KeyMineIncomeCap,
             KeyChestFirstSpawnSeconds, KeyChestSpawnIntervalSeconds, KeyChestGold, KeyChestCollectRadius,
+            KeyMineCaptureGiveUpSeconds, KeyMineCaptureRetrySeconds, KeyMaxUnitLevel, KeyLevelStatBonusPerLevel,
         };
 
         private MatchRules()
@@ -111,6 +116,17 @@ namespace NovaFaction.Sim.Content
         public Fix ChestGold { get; private set; }
         /// <summary>A unit collects a chest when its center is within this distance of the chest cell's center.</summary>
         public Fix ChestCollectRadius { get; private set; }
+        /// <summary>
+        /// A capturing unit whose mine capture has not moved forward for this long gives up (a whole number of
+        /// ticks, more than 0).
+        /// </summary>
+        public Fix MineCaptureGiveUpSeconds { get; private set; }
+        /// <summary>After giving up, a unit ignores mines for this long (a whole number of ticks).</summary>
+        public Fix MineCaptureRetrySeconds { get; private set; }
+        /// <summary>Highest card and structure level (levels run 1..this).</summary>
+        public int MaxUnitLevel { get; private set; }
+        /// <summary>Hp and Damage grow by this share of the base value per level above 1.</summary>
+        public Fix LevelStatBonusPerLevel { get; private set; }
         /// <summary>Keys whose values are placeholders awaiting tuning, in file order.</summary>
         public IReadOnlyList<string> TuningPlaceholders { get; private set; }
 
@@ -124,6 +140,14 @@ namespace NovaFaction.Sim.Content
         public int ChestFirstSpawnTick => ToTicks(ChestFirstSpawnSeconds);
         /// <summary>Ticks between chest waves (validated to convert exactly; at least 1).</summary>
         public int ChestSpawnIntervalTicks => ToTicks(ChestSpawnIntervalSeconds);
+
+        /// <summary>Give-up time in whole ticks (validated to convert exactly; at least 1).</summary>
+        public int MineCaptureGiveUpTicks => ToTicks(MineCaptureGiveUpSeconds);
+        /// <summary>Mine-ignoring time after a give-up, in whole ticks (validated to convert exactly).</summary>
+        public int MineCaptureRetryTicks => ToTicks(MineCaptureRetrySeconds);
+
+        /// <summary>The Hp and Damage multiplier of a level (1 + bonus * (level - 1)).</summary>
+        public Fix LevelFactor(int level) => StatMath.LevelFactor(LevelStatBonusPerLevel, level);
 
         private int ToTicks(Fix seconds) => Fix.FloorToInt(seconds * Fix.FromInt(TicksPerSecond));
 
@@ -187,6 +211,10 @@ namespace NovaFaction.Sim.Content
                 ChestSpawnIntervalSeconds = MinFix(root, KeyChestSpawnIntervalSeconds, Fix.Epsilon),
                 ChestGold = MinFix(root, KeyChestGold, Fix.Zero),
                 ChestCollectRadius = MinFix(root, KeyChestCollectRadius, Fix.Epsilon),
+                MineCaptureGiveUpSeconds = MinFix(root, KeyMineCaptureGiveUpSeconds, Fix.Epsilon),
+                MineCaptureRetrySeconds = MinFix(root, KeyMineCaptureRetrySeconds, Fix.Zero),
+                MaxUnitLevel = RangeInt(root, KeyMaxUnitLevel, 1, 100),
+                LevelStatBonusPerLevel = MinFix(root, KeyLevelStatBonusPerLevel, Fix.Zero),
             };
 
             // Cross-field rules.
@@ -229,12 +257,16 @@ namespace NovaFaction.Sim.Content
             {
                 throw root.Get(KeyUnitStoppedPushFactor).Error("unitStoppedPushFactor must be at most 1.");
             }
+            if (rules.LevelStatBonusPerLevel > Fix.One)
+            {
+                throw root.Get(KeyLevelStatBonusPerLevel).Error("levelStatBonusPerLevel must be at most 1.");
+            }
             if (rules.HandSize >= rules.DeckSize)
             {
                 throw root.Get(KeyHandSize).Error("handSize must be smaller than deckSize (a next card must exist).");
             }
             foreach (string key in new[] { KeyDeploySpawnDelaySeconds, KeyMineCaptureSeconds, KeyChestFirstSpawnSeconds,
-                KeyChestSpawnIntervalSeconds })
+                KeyChestSpawnIntervalSeconds, KeyMineCaptureGiveUpSeconds, KeyMineCaptureRetrySeconds })
             {
                 Fix ticks = root.Get(key).AsFix() * Fix.FromInt(rules.TicksPerSecond);
                 if (ticks != Fix.Floor(ticks) || ticks > Fix.FromInt(1_000_000))

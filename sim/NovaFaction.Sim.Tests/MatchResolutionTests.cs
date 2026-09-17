@@ -224,7 +224,7 @@ public class MatchResolutionTests
             s.Map.DestroyStructure(destroyed);
             // Also give the loser the healthier weakest structure and more gold: rule 1 comes first.
             s.Structures[winner == 0 ? Tower0East : Tower1West].Hp = Fix.One;
-            s.GetPlayer(1 - winner).GoldCollected = Fix.FromInt(5);
+            s.GetPlayer(1 - winner).GoldFromMap = Fix.FromInt(5);
         });
         AssertEnded(sim, winner, EndReason.TieBreak, TieBreakRule.StructuresDestroyed);
     }
@@ -241,34 +241,71 @@ public class MatchResolutionTests
             s.Structures[loser == 0 ? Tower0West : Tower1West].Hp = Fix.FromInt(100);
             s.Structures[winner == 0 ? Tower0West : Tower1West].Hp = Fix.FromInt(101);
             s.Structures[winner == 0 ? Keep0 : Keep1].Hp = Fix.FromInt(200);
-            s.GetPlayer(loser).GoldCollected = Fix.FromInt(5);
+            s.GetPlayer(loser).GoldFromMap = Fix.FromInt(5);
         });
         AssertEnded(sim, winner, EndReason.TieBreak, TieBreakRule.WeakestStructureHp);
-    }
-
-    [Fact]
-    public void TieBreak2_ADestroyedStructureCountsAsZero()
-    {
-        // Each player lost one tower (rule 1 level). Player 0's other structures are hurt, player 1's are not,
-        // but both weakest structures are the destroyed ones at 0 HP, so rule 2 is level too and gold decides.
-        Simulation sim = ExpireSuddenDeath(s =>
-        {
-            s.Map.DestroyStructure(Tower0West);
-            s.Map.DestroyStructure(Tower1West);
-            s.Structures[Tower0East].Hp = Fix.FromInt(50);
-            s.GetPlayer(0).GoldCollected = Fix.One;
-        });
-        AssertEnded(sim, 0, EndReason.TieBreak, TieBreakRule.GoldCollected);
     }
 
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
-    public void TieBreak3_MoreGoldCollected(int winner)
+    public void TieBreak2_ComparesWeakestStandingStructure_DestroyedOnesAreLeftOut(int winner)
     {
-        Simulation sim = ExpireSuddenDeath(s => s.GetPlayer(winner).GoldCollected = Fix.Epsilon);
-        AssertEnded(sim, winner, EndReason.TieBreak, TieBreakRule.GoldCollected);
-        // Base income does not count: both players banked the same, and the rule still used GoldCollected only.
+        // Each player lost one tower (rule 1 level; the destroyed towers are at 0 HP). Only standing structures
+        // count for rule 2: the winner's weakest standing one (200) beats the loser's (100). Under the old
+        // "destroyed counts as 0" wording both sides would have been level at 0.
+        Simulation sim = ExpireSuddenDeath(s =>
+        {
+            int loser = 1 - winner;
+            foreach (int destroyed in new[] { Tower0West, Tower1West })
+            {
+                s.Structures[destroyed].Hp = Fix.Zero;
+                s.Map.DestroyStructure(destroyed);
+            }
+            s.Structures[winner == 0 ? Tower0East : Tower1East].Hp = Fix.FromInt(200);
+            s.Structures[loser == 0 ? Tower0East : Tower1East].Hp = Fix.FromInt(100);
+            s.GetPlayer(loser).GoldFromMap = Fix.FromInt(5); // rule 3 would favor the loser
+        });
+        AssertEnded(sim, winner, EndReason.TieBreak, TieBreakRule.WeakestStructureHp);
+    }
+
+    [Fact]
+    public void TieBreak2_EqualStandingStructures_AfterEqualLosses_GoesToGold()
+    {
+        // Each lost one tower but player 0's lost tower kept its HP value: it must still be ignored, so the
+        // standing structures (all full) are level and rule 3 decides.
+        Simulation sim = ExpireSuddenDeath(s =>
+        {
+            s.Structures[Tower1West].Hp = Fix.Zero;
+            s.Map.DestroyStructure(Tower0West);
+            s.Map.DestroyStructure(Tower1West);
+            s.GetPlayer(1).GoldFromMap = Fix.One;
+        });
+        AssertEnded(sim, 1, EndReason.TieBreak, TieBreakRule.GoldFromMap);
+    }
+
+    [Fact]
+    public void TieBreak2_NoStandingStructureOnEitherSide_IsLevel()
+    {
+        Simulation sim = ExpireSuddenDeath(s =>
+        {
+            for (int i = 0; i < s.Structures.Count; i++)
+            {
+                s.Map.DestroyStructure(i);
+            }
+            s.GetPlayer(0).GoldFromMap = Fix.One;
+        });
+        AssertEnded(sim, 0, EndReason.TieBreak, TieBreakRule.GoldFromMap);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void TieBreak3_MoreGoldFromMap(int winner)
+    {
+        Simulation sim = ExpireSuddenDeath(s => s.GetPlayer(winner).GoldFromMap = Fix.Epsilon);
+        AssertEnded(sim, winner, EndReason.TieBreak, TieBreakRule.GoldFromMap);
+        // Base income does not count: both players banked the same, and the rule still used GoldFromMap only.
         Assert.Equal(sim.State.GetPlayer(0).Gold, sim.State.GetPlayer(1).Gold);
     }
 
@@ -296,10 +333,10 @@ public class MatchResolutionTests
     public void ZeroLengthSuddenDeath_GoesStraightToTheTieBreakList()
     {
         Simulation sim = TestSim.New(ShortRules(suddenDeath: "0"), MapTestData.LoadTwoLane(), 1, Quiet());
-        sim.State.GetPlayer(1).GoldCollected = Fix.One;
+        sim.State.GetPlayer(1).GoldFromMap = Fix.One;
         TestSim.Run(sim, 39);
         Step(sim);
-        AssertEnded(sim, 1, EndReason.TieBreak, TieBreakRule.GoldCollected);
+        AssertEnded(sim, 1, EndReason.TieBreak, TieBreakRule.GoldFromMap);
     }
 
     [Fact]
@@ -309,7 +346,7 @@ public class MatchResolutionTests
         Assert.Equal(MatchState.NoWinner, sim.State.Winner);
         Assert.Equal(EndReason.None, sim.State.EndReason);
         Assert.Equal(TieBreakRule.None, sim.State.TieBreakRule);
-        Assert.All(sim.State.Players, p => Assert.Equal(Fix.Zero, p.GoldCollected));
+        Assert.All(sim.State.Players, p => Assert.Equal(Fix.Zero, p.GoldFromMap));
         Assert.All(sim.State.Structures, s =>
         {
             Assert.Equal(s.Stats.Hp, s.Hp);

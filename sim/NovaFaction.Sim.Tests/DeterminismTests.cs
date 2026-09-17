@@ -1,6 +1,7 @@
 using NovaFaction.Sim.Combat;
 using NovaFaction.Sim.Commands;
 using NovaFaction.Sim.Content;
+using NovaFaction.Sim.Economy;
 using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
 using NovaFaction.Sim.Units;
@@ -321,14 +322,15 @@ public class DeterminismTests
         s.Phase = MatchPhase.SuddenDeath; Changed("Phase");
         s.Winner = 1; Changed("Winner");
         s.EndReason = EndReason.TieBreak; Changed("EndReason");
-        s.TieBreakRule = TieBreakRule.GoldCollected; Changed("TieBreakRule");
+        s.TieBreakRule = TieBreakRule.GoldFromMap; Changed("TieBreakRule");
         for (int p = 0; p < 2; p++)
         {
             PlayerState player = s.GetPlayer(p);
             player.Gold = Fix.FromRaw(player.Gold.Raw + 1); Changed("Gold raw of player " + p);
             player.IncomeRemainder = 3; Changed("IncomeRemainder of player " + p);
+            player.MineIncomeRemainder = 4; Changed("MineIncomeRemainder of player " + p);
             player.Score = Fix.FromRaw(1); Changed("Score of player " + p);
-            player.GoldCollected = Fix.FromRaw(1); Changed("GoldCollected of player " + p);
+            player.GoldFromMap = Fix.FromRaw(1); Changed("GoldFromMap of player " + p);
             player.CommandsReceived = 1; Changed("CommandsReceived of player " + p);
             player.IgnoredDeploys = 1; Changed("IgnoredDeploys of player " + p);
             player.Cards.Play(2); Changed("hand/cycle order of player " + p);
@@ -360,6 +362,20 @@ public class DeterminismTests
         s.ProjectileList.Add(shot); Changed("projectile added");
         shot.Position = TestSim.V("1", "2"); Changed("projectile position");
         shot.AimPoint = TestSim.V("2", "2"); Changed("projectile aim point");
+
+        Assert.Equal(2, s.Mines.Count);
+        foreach (MineState mine in s.Mines)
+        {
+            mine.CapturingPlayer = 1; Changed("capturing player of mine " + mine.Index);
+            mine.CaptureProgressTicks = 7; Changed("capture progress of mine " + mine.Index);
+            mine.Owner = 0; Changed("owner of mine " + mine.Index);
+            mine.Owner = 1; Changed("owner 1 of mine " + mine.Index);
+        }
+        Assert.Equal(4, s.Chests.Count);
+        foreach (ChestState chest in s.Chests)
+        {
+            chest.IsPresent = !chest.IsPresent; Changed("chest presence " + chest.Index);
+        }
 
         for (int i = 0; i < s.Map.Definition.Structures.Count; i++)
         {
@@ -402,7 +418,9 @@ public class DeterminismTests
   ""goldBaseIncomePerSecond"": 0.35, ""goldStartingAmount"": 5, ""goldCap"": 10,
   ""deploySpawnDelaySeconds"": 1, ""handSize"": 4, ""deckSize"": 8,
   ""unitSeparationDistance"": 0.6, ""unitSeparationPushPerSecond"": 1.5, ""unitSpawnSpacing"": 0.5,
-  ""suddenDeathIncomeMultiplier"": 2, ""unitStoppedPushFactor"": 0.3, ""aggroRadius"": 5.5, ""meleeTargetCrowdPenalty"": 1 }");
+  ""suddenDeathIncomeMultiplier"": 2, ""unitStoppedPushFactor"": 0.3, ""aggroRadius"": 5.5, ""meleeTargetCrowdPenalty"": 1,
+  ""mineCaptureRadius"": 1.5, ""mineCaptureSeconds"": 5, ""mineIncomePerSecond"": 0.05, ""mineIncomeCap"": 0.1,
+  ""chestFirstSpawnSeconds"": 30, ""chestSpawnIntervalSeconds"": 30, ""chestGold"": 0.75, ""chestCollectRadius"": 0.75 }");
         // Likewise a fixed inline map, so editing content/maps does not move the pin.
         MapDefinition map = MapTestData.Small();
         // ...and fixed structure stats, so tuning content/structures.json does not move it either.
@@ -413,7 +431,8 @@ public class DeterminismTests
         // The pin must cover deploys, spawns, movement and combat, not just the clock.
         MatchState s = sim.State;
         _output.WriteLine("units " + s.Units.Count + " created " + (s.NextUnitId - 1) + " shots " + s.NextProjectileId
-            + " scores " + s.Players[0].Score + "/" + s.Players[1].Score + " end " + s.Tick + " " + s.EndReason + " "
+            + " scores " + s.Players[0].Score + "/" + s.Players[1].Score + " map gold " + s.Players[0].GoldFromMap + "/"
+            + s.Players[1].GoldFromMap + " mines " + string.Join(",", s.Mines.Select(m => m.Owner)) + " end " + s.Tick + " " + s.EndReason + " "
             + s.TieBreakRule + " winner " + s.Winner + " hash 0x" + sim.ComputeHash().ToString("X16")
             + " initial 0x" + initialHash.ToString("X16"));
         Assert.Equal(PinnedInitialHash, initialHash);
@@ -421,12 +440,14 @@ public class DeterminismTests
         Assert.True(s.NextUnitId - 1 > s.Units.Count, "units should have died");
         Assert.True(s.NextProjectileId > 10, "projectiles should have flown");
         Assert.True(s.Players.All(p => p.Score > Fix.Zero), "both players should have damaged structures");
+        Assert.True(s.Players.All(p => p.GoldFromMap > Fix.Zero), "the pin should cover chest collection");
         Assert.NotEqual(EndReason.None, s.EndReason);
         Assert.Equal(PinnedFinalHash, sim.ComputeHash());
     }
 
-    private const ulong PinnedInitialHash = 0x22052D77FEFD544EUL;
-    private const ulong PinnedFinalHash = 0xFDB827F2542E267DUL;
+    // Re-pinned Sept 2026 for hash format 5 (mines, chests, gold from map; mine cells block movement).
+    private const ulong PinnedInitialHash = 0xAB9BF1262D788595UL;
+    private const ulong PinnedFinalHash = 0x156A629AAC1E8C42UL;
 }
 
 public class StateHasherTests

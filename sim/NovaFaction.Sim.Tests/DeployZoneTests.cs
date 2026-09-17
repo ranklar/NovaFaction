@@ -49,7 +49,7 @@ public class DeployZoneTests
         Assert.False(zones.IsDeployable(0, At(grid, 0, 2), null)); // '#' inside player 0's zone
         Assert.False(zones.IsDeployable(0, At(grid, 3, 0), null)); // own keep footprint
         Assert.False(zones.IsDeployable(0, At(grid, 6, 0), null)); // own tower footprint
-        Assert.True(zones.IsDeployable(0, At(grid, 0, 3), null));  // mine marker is open ground
+        Assert.False(zones.IsDeployable(0, At(grid, 0, 3), null)); // a mine blocks its cell
         Assert.True(zones.IsDeployable(0, At(grid, 3, 1), null));  // spawn marker is open ground
 
         // Even an unlocked zone covering the blocked cell does not help.

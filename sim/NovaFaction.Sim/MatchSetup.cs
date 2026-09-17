@@ -33,6 +33,12 @@ namespace NovaFaction.Sim
                 }
                 CheckSpeeds(deck);
             }
+            // A mine's own cell is blocked, so units can only stand next to it: the radius must reach that far.
+            if (map.Mines.Count > 0 && rules.MineCaptureRadius < map.CellSize)
+            {
+                throw new ArgumentException("mineCaptureRadius (" + rules.MineCaptureRadius + ") must be at least the map's "
+                    + "cellSize (" + map.CellSize + "), or units beside a mine could never capture it.");
+            }
         }
 
         public MatchRules Rules { get; }

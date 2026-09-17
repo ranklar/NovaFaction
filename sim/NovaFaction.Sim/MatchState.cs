@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using NovaFaction.Sim.Cards;
 using NovaFaction.Sim.Combat;
 using NovaFaction.Sim.Content;
+using NovaFaction.Sim.Economy;
 using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
 using NovaFaction.Sim.Units;
@@ -43,14 +44,20 @@ namespace NovaFaction.Sim
         /// </summary>
         public long IncomeRemainder { get; internal set; }
 
+        /// <summary>
+        /// The same carry as <see cref="IncomeRemainder"/>, for mine income. Kept separately so the gold that mines
+        /// actually delivered can be counted in <see cref="GoldFromMap"/>.
+        /// </summary>
+        public long MineIncomeRemainder { get; internal set; }
+
         /// <summary>Damage score: HP removed from enemy structures plus the destruction bonus of each one destroyed.</summary>
         public Fix Score { get; internal set; }
 
         /// <summary>
-        /// Gold picked up from mines and chests (base income does not count); a sudden-death tie-break.
-        /// Always 0 until mines and chests exist.
+        /// Gold actually received from mines and chests (base income does not count, nor gold lost to the cap);
+        /// tie-break rule 3.
         /// </summary>
-        public Fix GoldCollected { get; internal set; }
+        public Fix GoldFromMap { get; internal set; }
 
         /// <summary>Number of valid commands this player has submitted.</summary>
         public int CommandsReceived { get; internal set; }
@@ -72,8 +79,9 @@ namespace NovaFaction.Sim
             hasher.Add(Index);
             hasher.Add(Gold);
             hasher.Add(IncomeRemainder);
+            hasher.Add(MineIncomeRemainder);
             hasher.Add(Score);
-            hasher.Add(GoldCollected);
+            hasher.Add(GoldFromMap);
             hasher.Add(CommandsReceived);
             hasher.Add(IgnoredDeploys);
             hasher.Add(Deck.Roster.ContentHash);
@@ -92,7 +100,8 @@ namespace NovaFaction.Sim
         // Version 3 added decks/hands, ignored deploys, units and pending spawns.
         // Version 4 added combat: result fields, gold collected, structure stats and state, unit targets and
         // cooldowns, and projectiles.
-        public const int HashFormatVersion = 4;
+        // Version 5 added map gold: mine income carry, gold from map, mines and chests.
+        public const int HashFormatVersion = 5;
 
         /// <summary><see cref="Winner"/> value while nobody has won.</summary>
         public const int NoWinner = -1;
@@ -102,6 +111,8 @@ namespace NovaFaction.Sim
         private readonly List<PendingSpawn> _pendingSpawns = new List<PendingSpawn>();
         private readonly StructureState[] _structures;
         private readonly List<Projectile> _projectiles = new List<Projectile>();
+        private readonly MineState[] _mines;
+        private readonly ChestState[] _chests;
 
         internal MatchState(ulong seed, MatchSetup setup)
         {
@@ -125,6 +136,9 @@ namespace NovaFaction.Sim
             {
                 _structures[s.Index] = new StructureState(s, setup.Structures.Get(s.Kind), Map.Grid);
             }
+            _mines = MapGoldSystem.CreateMines(setup.Map, Map.Grid, rules);
+            _chests = MapGoldSystem.CreateChests(setup.Map, Map.Grid);
+            MapGoldSystem.SpawnDueChests(this, rules); // a first wave at 0 s appears at the start
         }
 
         /// <summary>Number of ticks completed. The next Tick() call executes tick number <see cref="Tick"/>.</summary>
@@ -161,6 +175,12 @@ namespace NovaFaction.Sim
 
         /// <summary>The id the next fired projectile will get. Ids start at 1 and are never reused.</summary>
         public int NextProjectileId { get; internal set; }
+
+        /// <summary>Gold mines, in the map's mine order.</summary>
+        public IReadOnlyList<MineState> Mines => _mines;
+
+        /// <summary>Chest spawn points and whether a chest waits at each, in the map's chest spawn order.</summary>
+        public IReadOnlyList<ChestState> Chests => _chests;
 
         /// <summary>Always two players, index 0 and 1.</summary>
         public IReadOnlyList<PlayerState> Players => _players;
@@ -265,7 +285,17 @@ namespace NovaFaction.Sim
             {
                 hasher.AddHashable(projectile);
             }
-            // Future state (mines, chests) is appended here: count first, then each item in id order.
+            hasher.Add(_mines.Length);
+            foreach (MineState mine in _mines) // index order
+            {
+                hasher.AddHashable(mine);
+            }
+            hasher.Add(_chests.Length);
+            foreach (ChestState chest in _chests) // index order
+            {
+                hasher.AddHashable(chest);
+            }
+            // Future state is appended here: count first, then each item in id order.
         }
     }
 

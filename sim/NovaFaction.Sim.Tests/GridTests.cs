@@ -65,12 +65,15 @@ public class GridTests
     }
 
     [Fact]
-    public void Walkability_TreatsTerrainFootprintsAndBoundsAsBlocked()
+    public void Walkability_TreatsTerrainMinesFootprintsAndBoundsAsBlocked()
     {
         var grid = new Grid(Small());
         Assert.True(grid.IsWalkable(1, 0));      // ground
         Assert.True(grid.IsWalkable(3, 1));      // spawn marker
-        Assert.True(grid.IsWalkable(0, 3));      // mine
+        Assert.False(grid.IsWalkable(0, 3));     // mine: a 1x1 blocked footprint
+        Assert.True(grid.IsMine(0, 3));
+        Assert.False(grid.IsMine(6, 3));
+        Assert.False(grid.IsTerrainBlocked(0, 3)); // mines are not terrain
         Assert.True(grid.IsWalkable(6, 3));      // chest spawn
         Assert.False(grid.IsWalkable(0, 4));     // '#'
         Assert.False(grid.IsWalkable(3, 0));     // keep footprint

@@ -33,6 +33,14 @@ namespace NovaFaction.Sim.Content
         private const string KeyUnitSpawnSpacing = "unitSpawnSpacing";
         private const string KeyAggroRadius = "aggroRadius";
         private const string KeyMeleeTargetCrowdPenalty = "meleeTargetCrowdPenalty";
+        private const string KeyMineCaptureRadius = "mineCaptureRadius";
+        private const string KeyMineCaptureSeconds = "mineCaptureSeconds";
+        private const string KeyMineIncomePerSecond = "mineIncomePerSecond";
+        private const string KeyMineIncomeCap = "mineIncomeCap";
+        private const string KeyChestFirstSpawnSeconds = "chestFirstSpawnSeconds";
+        private const string KeyChestSpawnIntervalSeconds = "chestSpawnIntervalSeconds";
+        private const string KeyChestGold = "chestGold";
+        private const string KeyChestCollectRadius = "chestCollectRadius";
         private const string KeyTuningPlaceholders = "tuningPlaceholders";
 
         private static readonly string[] RequiredKeys =
@@ -42,6 +50,8 @@ namespace NovaFaction.Sim.Content
             KeyDeploySpawnDelaySeconds, KeyHandSize, KeyDeckSize,
             KeyUnitSeparationDistance, KeyUnitSeparationPushPerSecond, KeyUnitStoppedPushFactor, KeyUnitSpawnSpacing,
             KeyAggroRadius, KeyMeleeTargetCrowdPenalty,
+            KeyMineCaptureRadius, KeyMineCaptureSeconds, KeyMineIncomePerSecond, KeyMineIncomeCap,
+            KeyChestFirstSpawnSeconds, KeyChestSpawnIntervalSeconds, KeyChestGold, KeyChestCollectRadius,
         };
 
         private MatchRules()
@@ -82,13 +92,40 @@ namespace NovaFaction.Sim.Content
         /// already targeting it, which spreads melee attackers over several enemies.
         /// </summary>
         public Fix MeleeTargetCrowdPenalty { get; private set; }
+        /// <summary>
+        /// A player's units within this distance (world units, unit center to mine cell center) count as present
+        /// at a gold mine. Must be at least one cell on any map with mines, so units beside the mine count.
+        /// </summary>
+        public Fix MineCaptureRadius { get; private set; }
+        /// <summary>How long one player must be alone at a mine to capture it (a whole number of ticks).</summary>
+        public Fix MineCaptureSeconds { get; private set; }
+        /// <summary>Extra income per second for each owned mine.</summary>
+        public Fix MineIncomePerSecond { get; private set; }
+        /// <summary>The most mine income per second one player can have, however many mines they own.</summary>
+        public Fix MineIncomeCap { get; private set; }
+        /// <summary>Match time of the first chest wave (a whole number of ticks; 0 = chests at the start).</summary>
+        public Fix ChestFirstSpawnSeconds { get; private set; }
+        /// <summary>Time between chest waves (a whole number of ticks, more than 0).</summary>
+        public Fix ChestSpawnIntervalSeconds { get; private set; }
+        /// <summary>Gold a chest gives the player who collects it (limited by the gold cap).</summary>
+        public Fix ChestGold { get; private set; }
+        /// <summary>A unit collects a chest when its center is within this distance of the chest cell's center.</summary>
+        public Fix ChestCollectRadius { get; private set; }
         /// <summary>Keys whose values are placeholders awaiting tuning, in file order.</summary>
         public IReadOnlyList<string> TuningPlaceholders { get; private set; }
 
         public int MatchLengthTicks => MatchLengthSeconds * TicksPerSecond;
         public int SuddenDeathTicks => SuddenDeathSeconds * TicksPerSecond;
         /// <summary>Spawn delay in whole ticks (validated to convert exactly).</summary>
-        public int DeploySpawnDelayTicks => Fix.FloorToInt(DeploySpawnDelaySeconds * Fix.FromInt(TicksPerSecond));
+        public int DeploySpawnDelayTicks => ToTicks(DeploySpawnDelaySeconds);
+        /// <summary>Mine capture time in whole ticks (validated to convert exactly; at least 1).</summary>
+        public int MineCaptureTicks => ToTicks(MineCaptureSeconds);
+        /// <summary>Tick of the first chest wave (validated to convert exactly).</summary>
+        public int ChestFirstSpawnTick => ToTicks(ChestFirstSpawnSeconds);
+        /// <summary>Ticks between chest waves (validated to convert exactly; at least 1).</summary>
+        public int ChestSpawnIntervalTicks => ToTicks(ChestSpawnIntervalSeconds);
+
+        private int ToTicks(Fix seconds) => Fix.FloorToInt(seconds * Fix.FromInt(TicksPerSecond));
 
         /// <summary>Parses and validates rules JSON. Throws <see cref="SimJsonException"/> on any problem.</summary>
         public static MatchRules FromJson(string json, string sourceName = DefaultSourceName)
@@ -132,6 +169,14 @@ namespace NovaFaction.Sim.Content
                 UnitSpawnSpacing = MinFix(root, KeyUnitSpawnSpacing, Fix.Zero),
                 AggroRadius = MinFix(root, KeyAggroRadius, Fix.Zero),
                 MeleeTargetCrowdPenalty = MinFix(root, KeyMeleeTargetCrowdPenalty, Fix.Zero),
+                MineCaptureRadius = MinFix(root, KeyMineCaptureRadius, Fix.Epsilon),
+                MineCaptureSeconds = MinFix(root, KeyMineCaptureSeconds, Fix.Epsilon),
+                MineIncomePerSecond = MinFix(root, KeyMineIncomePerSecond, Fix.Zero),
+                MineIncomeCap = MinFix(root, KeyMineIncomeCap, Fix.Zero),
+                ChestFirstSpawnSeconds = MinFix(root, KeyChestFirstSpawnSeconds, Fix.Zero),
+                ChestSpawnIntervalSeconds = MinFix(root, KeyChestSpawnIntervalSeconds, Fix.Epsilon),
+                ChestGold = MinFix(root, KeyChestGold, Fix.Zero),
+                ChestCollectRadius = MinFix(root, KeyChestCollectRadius, Fix.Epsilon),
             };
 
             // Cross-field rules.
@@ -152,6 +197,24 @@ namespace NovaFaction.Sim.Content
                 throw root.Get(KeySuddenDeathIncomeMultiplier).Error(
                     "goldBaseIncomePerSecond * suddenDeathIncomeMultiplier must not exceed goldCap.");
             }
+            if (rules.MineIncomePerSecond > rules.GoldCap)
+            {
+                throw root.Get(KeyMineIncomePerSecond).Error("mineIncomePerSecond must not exceed goldCap.");
+            }
+            if (rules.GoldBaseIncomePerSecond + rules.MineIncomeCap > rules.GoldCap)
+            {
+                throw root.Get(KeyMineIncomeCap).Error("goldBaseIncomePerSecond + mineIncomeCap must not exceed goldCap.");
+            }
+            // Sudden death multiplies all income, mine income included.
+            if ((rules.GoldBaseIncomePerSecond + rules.MineIncomeCap) * rules.SuddenDeathIncomeMultiplier > rules.GoldCap)
+            {
+                throw root.Get(KeyMineIncomeCap).Error(
+                    "(goldBaseIncomePerSecond + mineIncomeCap) * suddenDeathIncomeMultiplier must not exceed goldCap.");
+            }
+            if (rules.ChestGold > rules.GoldCap)
+            {
+                throw root.Get(KeyChestGold).Error("chestGold must not exceed goldCap.");
+            }
             if (rules.UnitStoppedPushFactor > Fix.One)
             {
                 throw root.Get(KeyUnitStoppedPushFactor).Error("unitStoppedPushFactor must be at most 1.");
@@ -160,15 +223,18 @@ namespace NovaFaction.Sim.Content
             {
                 throw root.Get(KeyHandSize).Error("handSize must be smaller than deckSize (a next card must exist).");
             }
-            Fix delayTicks = rules.DeploySpawnDelaySeconds * Fix.FromInt(rules.TicksPerSecond);
-            if (delayTicks != Fix.Floor(delayTicks) || delayTicks > Fix.FromInt(1_000_000))
+            foreach (string key in new[] { KeyDeploySpawnDelaySeconds, KeyMineCaptureSeconds, KeyChestFirstSpawnSeconds,
+                KeyChestSpawnIntervalSeconds })
             {
-                throw root.Get(KeyDeploySpawnDelaySeconds).Error(
-                    "deploySpawnDelaySeconds must be a whole number of ticks (a multiple of 1/ticksPerSecond).");
+                Fix ticks = root.Get(key).AsFix() * Fix.FromInt(rules.TicksPerSecond);
+                if (ticks != Fix.Floor(ticks) || ticks > Fix.FromInt(1_000_000))
+                {
+                    throw root.Get(key).Error(key + " must be a whole number of ticks (a multiple of 1/ticksPerSecond).");
+                }
             }
 
             foreach (string key in new[] { KeyUnitSeparationDistance, KeyUnitSeparationPushPerSecond, KeyUnitSpawnSpacing, KeyAggroRadius,
-                KeyMeleeTargetCrowdPenalty, KeySuddenDeathIncomeMultiplier })
+                KeyMeleeTargetCrowdPenalty, KeySuddenDeathIncomeMultiplier, KeyMineCaptureRadius, KeyChestCollectRadius })
             {
                 if (root.Get(key).AsFix() > Fix.FromInt(64))
                 {

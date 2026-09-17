@@ -13,8 +13,9 @@ Themed factions released over time as content packs; fantasy faction first.
   (rules.json suddenDeathIncomeMultiplier); the first player to deal any structure damage wins.
   If it expires with no damage dealt, tie-breaks apply in this order:
   1. more enemy structures destroyed;
-  2. higher HP on your own weakest structure (a destroyed structure counts as 0 HP);
-  3. more gold collected from mines and chests (base income does not count);
+  2. higher HP on your own weakest standing structure (destroyed structures are left out; rule 1
+     already counted them. Corrected Sept 2026; it used to say a destroyed structure counts as 0 HP);
+  3. more gold received from mines and chests (base income does not count);
   4. a coin flip from the match seed.
 - Score = HP removed from enemy structures + a destruction bonus per structure killed.
 - Structures per side: Keep (base) + 2 forward towers. Forward towers attack.
@@ -22,6 +23,7 @@ Themed factions released over time as content packs; fantasy faction first.
 - Resource: Gold (display name is faction data). Steady base income plus two map sources:
   gold mines (neutral, capturable, extra income, capped) and gold chests (spawn on the
   field, collected by walking a unit over them). Target: active player earns ~1/3 more than a turtle.
+  Implemented Sept 2026; see "Map gold" under Technical architecture for the rules and the arithmetic.
 - Stored gold caps at 10. Unit costs 1-7.
 - Deck of 8 = 1 leader + 7 cards. Hand of 4, next card visible. Cycle order shuffled from
   the match seed, then loops.
@@ -101,11 +103,11 @@ Themed factions released over time as content packs; fantasy faction first.
 - Sim match loop (sim/NovaFaction.Sim):
   - content/rules.json holds match-wide rules (tick rate, clock, sudden death length and income
     multiplier, gold income/start/cap, spawn delay, hand and deck size, unit separation, stopped push
-    and spawn spacing, aggro radius, melee crowd penalty). Every key is required; unknown keys are
-    errors. JSON has no comments, so values that are still guesses are listed by name in
-    "tuningPlaceholders". Current placeholders: base income 0.35 gold/s (about Clash Royale's pace),
-    5 starting gold, the four unit movement values (see "Units, decks and movement") and the two
-    targeting values (see "Combat and match resolution").
+    and spawn spacing, aggro radius, melee crowd penalty, and the eight map gold values). Every key is
+    required; unknown keys are errors. JSON has no comments, so values that are still guesses are listed
+    by name in "tuningPlaceholders". Current placeholders: base income 0.35 gold/s (about Clash Royale's
+    pace), 5 starting gold, the four unit movement values (see "Units, decks and movement"), the two
+    targeting values (see "Combat and match resolution") and all eight map gold values (see "Map gold").
     suddenDeathIncomeMultiplier (2) is design data, not a placeholder; base income times it must not
     exceed the gold cap. unitStoppedPushFactor must be 0..1.
     The spawn delay must be a whole number of ticks. handSize must be less than deckSize.
@@ -121,30 +123,34 @@ Themed factions released over time as content packs; fantasy faction first.
     increase the player's IgnoredDeploys counter, which is in the state hash.
   - Simulation.Tick(commands) order: validate, record in the CommandLog, apply commands in
     canonical order, create units of zero-delay deploys, combat and movement (see "Combat and match
-    resolution"), resolve Keep kills and sudden-death damage, accrue income (multiplied in sudden
-    death), advance tick and clock; then, unless the match just ended, create units whose spawn delay
-    is over and handle clock expiry.
+    resolution"), resolve Keep kills and sudden-death damage, mine capture then chest collection (see
+    "Map gold"), accrue income (base plus mines, multiplied in sudden death), advance tick and clock;
+    then, unless the match just ended, create units whose spawn delay is over, spawn a due chest wave,
+    and handle clock expiry.
     Tick N's commands must be stamped N (State.Tick before the call). A 3:00 match is 3600 ticks.
   - A match is built from a MatchSetup (rules, map, structure stats, player 0's deck, player 1's deck)
     plus the seed:
     new Simulation(setup, seed); Simulation.Replay(setup, seed, log). Each deck carries its own
     faction roster, so the two players may later bring different factions.
   - Income is exact: each tick adds income/ticksPerSecond with the sub-raw remainder carried per
-    player, so a player gains exactly the per-second income every whole second. At the cap the
-    carry is discarded (a capped player banks nothing).
+    player, so a player gains exactly the per-second income every whole second. Base income and mine
+    income have separate carries and are added in that order, so at the cap mine gold is the part
+    that gets lost. At the cap both carries are discarded (a capped player banks nothing).
   - Clock expiry: see "Combat and match resolution".
   - State hash: 64-bit FNV-1a over little-endian bytes, starting with a hash format version.
     Covers tick, RNG state, clock, phase, winner, end reason, tie-break rule, and per player: gold
-    raw, income carry, score, gold collected, command count, ignored deploys, the deck's unit-data
-    content hash, hand slots and draw queue. Then the map, the structures file's content hash, every
-    structure's combat state (index order: index, hp, attack cooldown, target unit id), the next unit
-    id, every unit (id order: id, owner, card id, position, hp, state, objective, target kind and id,
-    attack cooldown), every pending spawn (deploy order), the next projectile id and every projectile
-    (id order: id, owner, position, target, aim point, speed per tick, damage, splash radius, target
-    layer). Hash format version is 4.
+    raw, income carry, mine income carry, score, gold from map, command count, ignored deploys, the
+    deck's unit-data content hash, hand slots and draw queue. Then the map, the structures file's
+    content hash, every structure's combat state (index order: index, hp, attack cooldown, target unit
+    id), the next unit id, every unit (id order: id, owner, card id, position, hp, state, objective,
+    target kind and id, attack cooldown), every pending spawn (deploy order), the next projectile id and
+    every projectile (id order: id, owner, position, target, aim point, speed per tick, damage, splash
+    radius, target layer), every mine (index order: index, owner, capturing player, capture progress
+    ticks) and every chest spawn (index order: index, chest present). Hash format version is 5.
     New state implements IStateHashable and appends count-then-items in id order.
     A test pins the hash of a scripted full match on the small test map with fixed inline rules and
-    structure stats (it includes kills, projectiles and a Keep kill); change it only on purpose.
+    structure stats (it includes kills, projectiles, chest pickups by both players and a Keep kill);
+    change it only on purpose.
   - Replay = rules + seed + CommandLog (Simulation.Replay). The log is in memory only for now.
   - Replay file format (decided Sept 2026, not implemented yet): compact, versioned binary.
     Header: replay format version, sim version, content version, rules version, seed, map id (plus
@@ -159,7 +165,8 @@ Themed factions released over time as content packs; fantasy faction first.
     per cell, 1/16..64), grid, structures, deployZones. Unknown keys are errors.
   - grid: equal-length strings, first string = top row. Legend: '.' ground, '#' blocked, 'K' Keep,
     'T' forward tower, 'M' gold mine, 'C' chest spawn, '0'/'1' player spawn-side marker.
-    M, C, 0, 1 are markers on open ground (walkable). Max 256x256.
+    C, 0, 1 are markers on open ground (walkable). M is a mine with a 1x1 blocked footprint (changed
+    Sept 2026; it used to be walkable). Max 256x256.
   - Coordinates: cell (0,0) is bottom-left; y grows toward player 1. World origin is the
     bottom-left corner of cell (0,0); cell (x,y) covers [x, x+1) * cellSize on each axis.
     Player 0 owns the bottom, player 1 the top, but owners are written explicitly in the file.
@@ -177,8 +184,10 @@ Themed factions released over time as content packs; fantasy faction first.
     whitespace, which git may change per platform, do not matter. Folded into the state hash along
     with the map id, which structures are destroyed, and each player's unlocked zones.
     Hash format version is now 2.
-  - Grid: walkable = in bounds, not '#', and not under a standing structure. Destroying a structure
-    makes its footprint walkable and bumps a walkability version. WorldToCell is exact floor division.
+  - Grid: walkable = in bounds, not '#', not a mine, and not under a standing structure. Destroying a
+    structure makes its footprint walkable and bumps a walkability version. Mines never change.
+    WorldToCell is exact floor division. The map validation's reachability checks use this grid, so a
+    mine that walls off a lane or a spawn marker is a load error.
   - FlowField (one per target structure, cached, rebuilt when the walkability version changes):
     Dijkstra from the target's cells over walkable cells, 8 neighbors, straight cost 1, diagonal
     cost sqrt(2) = 92682/65536. No corner cutting: a diagonal needs both side cells open. The target's
@@ -238,8 +247,9 @@ Themed factions released over time as content packs; fantasy faction first.
     Attacking), objective (structure index or none), target (enemy unit id, structure index or none)
     and attack cooldown. Stored in id order. Holding now means "nothing it can attack" (e.g. no enemy
     structure left); a unit in range of its target is Attacking.
-    The client reads MatchState.Units, Structures, Projectiles, PendingSpawns, Winner/EndReason and
-    each player's Cards (Hand, NextCard, Queue); only the sim can change them.
+    The client reads MatchState.Units, Structures, Projectiles, PendingSpawns, Mines, Chests,
+    Winner/EndReason and each player's Cards (Hand, NextCard, Queue), Gold and GoldFromMap; only the
+    sim can change them.
   - Movement runs in two passes so update order cannot matter: every unit decides state, target,
     objective and velocity from the positions at the start of the tick, then moving units step
     (targeting details in "Combat and match resolution").
@@ -335,11 +345,58 @@ Themed factions released over time as content packs; fantasy faction first.
       players removed structure HP that tick, the one who removed more wins; exactly equal goes to the
       tie-break list. Unit-on-unit damage does not count.
     - Sudden death clock at zero: the tie-break list (TieBreak, TieBreakRule says which rule decided):
-      1. more enemy structures destroyed; 2. higher HP on your own weakest structure, where a destroyed
-      structure counts as 0 HP (as decided above; so if both players lost a structure this rule is
-      level); 3. more gold collected from mines and chests (PlayerState.GoldCollected, always 0 until
-      mines and chests exist); 4. a coin flip: SimRandom.NextInt(0, 2) from the match RNG, the only
-      draw combat makes.
+      1. more enemy structures destroyed; 2. higher HP on your own weakest standing structure
+      (destroyed structures are left out, whatever HP value they kept; a player with no standing
+      structure counts as 0); 3. more gold received from mines and chests (PlayerState.GoldFromMap,
+      see "Map gold"); 4. a coin flip: SimRandom.NextInt(0, 2) from the match RNG, the only draw
+      combat makes.
+- Map gold (sim/NovaFaction.Sim/Economy, implemented Sept 2026):
+  - MatchState.Mines: one per 'M' cell, in map order (bottom row first, then left to right). Neutral
+    at the start. The cell is blocked for movement and deploys, but a mine is not a structure: it
+    cannot be targeted or damaged, never becomes a unit objective, and scores nothing.
+  - Presence: a unit (ground or air, any state, alive after this tick's combat) counts when its center
+    is within mineCaptureRadius of the mine cell's center (<=). The radius must be at least the map's
+    cell size, or units next to the mine could never reach it (MatchSetup checks this).
+  - Capture, evaluated once per tick after combat: exactly one player present who is not the owner
+    moves progress one tick toward their capture. If the other player has stored progress, it is
+    first unwound one tick per tick; only at 0 does the new player's progress start. Progress
+    reaching mineCaptureSeconds (in ticks) makes that player the owner and resets progress to 0.
+    Both players present: progress pauses. Nobody present, or only the owner: progress decays one
+    tick per tick toward 0 (decided Sept 2026: decay is as fast as capture, and the owner standing at
+    the mine undoes an enemy's attempt). An owned mine is recaptured the same way; it stays with its
+    owner until the enemy's capture completes.
+  - Income: each owned mine adds mineIncomePerSecond; a player's mine income is capped at
+    mineIncomeCap. It uses the exact accrual with its own carry (see "Sim match loop"), is doubled in
+    sudden death like base income (decided Sept 2026: sudden death doubles all income), and a capture
+    counts from the tick it completes. rules.json requires (goldBaseIncomePerSecond + mineIncomeCap)
+    * suddenDeathIncomeMultiplier <= goldCap.
+  - MatchState.Chests: one entry per 'C' spawn point, in map order, with IsPresent. A wave comes at
+    chestFirstSpawnSeconds of match time and every chestSpawnIntervalSeconds after (sudden death
+    included; match time = ticks since the start). It fills every empty spawn point; a waiting chest
+    stays as it is, so chests never stack. A wave due at 0 s is there at the start; a wave due on the
+    tick the match ends still appears (harmless). Both times must be whole ticks.
+  - Collection, after mine capture: any unit (either player, ground or air) whose center is within
+    chestCollectRadius of the spawn cell's center takes the chest on the first tick it is there,
+    measured after this tick's movement. If several units qualify, the closest one wins (exact
+    distance), then the lower unit id. A unit already standing on a spawn point takes a new chest on
+    the tick after it appears. The owner gets chestGold at once, limited by the gold cap; the chest is
+    used up even if the player is full.
+  - GoldFromMap per player = mine income and chest gold actually added to the bank (gold lost at the
+    cap does not count). Tie-break rule 3 uses it.
+  - Placeholder values and the 1/3 target (twolane, 3:00, base income 0.35/s):
+    - a turtle earns 0.35 * 180 = 63 gold;
+    - mines: mineIncomePerSecond 0.05, mineIncomeCap 0.1 (both mines). Allowing for walking there,
+      the 5 s capture (mineCaptureSeconds) and losing a mine now and then, assume both are held for
+      about 120 s: 0.1 * 120 = 12 gold;
+    - chests: waves at 30, 60, 90, 120 and 150 s (chestFirstSpawnSeconds 30, chestSpawnIntervalSeconds
+      30) at 4 spawn points = at most 20 chests in regulation; an active player who takes 12 of them
+      at chestGold 0.75 gets 9 gold;
+    - 12 + 9 = 21 = 63 / 3, so the active player banks about 84 against the turtle's 63, if they keep
+      spending so the cap does not swallow it.
+    - mineCaptureRadius 1.5 (cells next to the mine, diagonals included) and chestCollectRadius 0.75
+      (a unit walking through the spawn cell) are feel values. At walking speed a unit spends only 3-4 s
+      inside the capture radius, so a mine needs a unit that stops there or a steady stream. Tune all
+      eight in the headless harness.
 - server/: ASP.NET Core (C#). Accounts, economy, matchmaking, input relay, match verification by
   re-running the sim. PostgreSQL. Runs on the Windows desktop for LAN testing; cloud container later.
 - content/: JSON data for units, factions, maps, missions. Art in Addressables bundles per theme.
@@ -370,7 +427,10 @@ Themed factions released over time as content packs; fantasy faction first.
 - Combat numbers (structure HP/damage/range, aggro radius, stopped push, crowd penalty) are
   placeholders; with the shipped numbers towers win most fights against a trickle of units. Tune in
   the headless harness.
-- Tie-break rule 2 wording: the Sept 2026 combat request said "weakest standing structure"; the design
-  decision above (a destroyed structure counts as 0 HP) was kept. Confirm.
+- Map gold numbers (all eight rules.json values) are placeholders built on the arithmetic in "Map gold";
+  check in the headless harness that an active bot really earns ~1/3 more than a turtle.
+- Units have no reason to go to a mine or chest on their own (their objective is always a structure).
+  The bot, and later mission design, must deploy toward them on purpose. Revisit if players find
+  mines hard to hold.
 - Crowding at structures (fixed Sept 2026 with the weak stopped push and sideways slide): a busy
   scripted battle test requires that every living unit is Attacking or Holding at the end.

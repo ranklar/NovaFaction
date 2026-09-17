@@ -11,28 +11,32 @@ namespace NovaFaction.Sim.Map
     /// [x * cellSize, (x + 1) * cellSize) on X and the same on Y. Y grows toward player 1.
     /// </para>
     /// <para>
-    /// A cell is walkable when it is inside the map, is not '#' terrain, and is not covered by a
-    /// structure that is still standing. Destroying a structure makes its footprint walkable.
+    /// A cell is walkable when it is inside the map, is not '#' terrain, is not a gold mine, and is not
+    /// covered by a structure that is still standing. Destroying a structure makes its footprint walkable;
+    /// mines are never destroyed, so their cells stay blocked all match.
     /// </para>
     /// </summary>
     public sealed class Grid
     {
         private readonly bool[] _terrainBlocked;
+        private readonly bool[] _mine;
         private readonly int[] _structureAt; // structure index per cell, or -1
         private readonly CellRect[] _footprints;
         private readonly bool[] _destroyed;
 
         /// <summary>Builds the starting grid of a map: all structures standing.</summary>
         public Grid(MapDefinition map)
-            : this(map.Width, map.Height, map.CellSize, TerrainOf(map), FootprintsOf(map))
+            : this(map.Width, map.Height, map.CellSize, TerrainOf(map), FootprintsOf(map), map.Mines)
         {
         }
 
         /// <summary>
         /// Builds a grid from raw data (used by tests and tools). <paramref name="terrainBlocked"/> is
         /// row-major with row 0 at the bottom. Footprints must be inside the grid and must not overlap.
+        /// Mine cells (optional) are blocked like 1x1 footprints that never fall.
         /// </summary>
-        internal Grid(int width, int height, Fix cellSize, bool[] terrainBlocked, IReadOnlyList<CellRect> footprints)
+        internal Grid(int width, int height, Fix cellSize, bool[] terrainBlocked, IReadOnlyList<CellRect> footprints,
+            IReadOnlyList<CellCoord>? mines = null)
         {
             if (width < 1 || height < 1 || width > MapDefinition.MaxSize || height > MapDefinition.MaxSize)
             {
@@ -54,6 +58,18 @@ namespace NovaFaction.Sim.Map
             for (int i = 0; i < _structureAt.Length; i++)
             {
                 _structureAt[i] = -1;
+            }
+            _mine = new bool[width * height];
+            if (mines != null)
+            {
+                foreach (CellCoord mine in mines)
+                {
+                    if (!IsInBounds(mine))
+                    {
+                        throw new ArgumentException("Mine " + mine + " is outside the grid.", nameof(mines));
+                    }
+                    _mine[ToIndex(mine.X, mine.Y)] = true;
+                }
             }
             _footprints = new CellRect[footprints.Count];
             _destroyed = new bool[footprints.Count];
@@ -148,7 +164,7 @@ namespace NovaFaction.Sim.Map
                 return false;
             }
             int i = ToIndex(x, y);
-            if (_terrainBlocked[i])
+            if (_terrainBlocked[i] || _mine[i])
             {
                 return false;
             }
@@ -159,6 +175,9 @@ namespace NovaFaction.Sim.Map
         public bool IsWalkable(CellCoord cell) => IsWalkable(cell.X, cell.Y);
 
         public bool IsWalkableAt(FixVector2 world) => IsWalkable(WorldToCell(world));
+
+        /// <summary>True if a gold mine stands on the cell (mines block movement for the whole match).</summary>
+        public bool IsMine(int x, int y) => IsInBounds(x, y) && _mine[ToIndex(x, y)];
 
         /// <summary>Index of the structure whose footprint covers the cell (standing or destroyed), or -1.</summary>
         public int GetStructureAt(int x, int y) => IsInBounds(x, y) ? _structureAt[ToIndex(x, y)] : -1;

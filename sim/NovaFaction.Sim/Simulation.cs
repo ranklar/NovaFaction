@@ -4,6 +4,7 @@ using NovaFaction.Sim.Cards;
 using NovaFaction.Sim.Combat;
 using NovaFaction.Sim.Commands;
 using NovaFaction.Sim.Content;
+using NovaFaction.Sim.Economy;
 using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
 using NovaFaction.Sim.Units;
@@ -44,9 +45,10 @@ namespace NovaFaction.Sim
         /// Advances one tick. Every command must be stamped with <c>State.Tick</c> and be well-formed
         /// (see <see cref="Command.Validate"/>); otherwise this throws and the state is unchanged.
         /// Order of work: apply commands (canonical order), create units of zero-delay deploys, run combat
-        /// and movement (<see cref="BattleSystem"/>), resolve Keep kills and sudden-death damage, accrue
-        /// income, advance the tick and clock, then (unless the match just ended) create units whose spawn
-        /// delay is over and handle clock expiry. A deploy on tick N with a delay of D ticks therefore creates its
+        /// and movement (<see cref="BattleSystem"/>), resolve Keep kills and sudden-death damage, update mine
+        /// capture and collect chests (<see cref="MapGoldSystem"/>), accrue income (base and mines), advance the
+        /// tick and clock, then (unless the match just ended) create units whose spawn delay is over, spawn a due
+        /// chest wave and handle clock expiry. A deploy on tick N with a delay of D ticks therefore creates its
         /// units at time N + D: for D &gt; 0 they are in the state once <c>State.Tick</c> reaches N + D
         /// and have not moved yet; for D = 0 they appear during tick N and already move on it.
         /// </summary>
@@ -81,6 +83,7 @@ namespace NovaFaction.Sim
 
             BattleOutcome outcome = BattleSystem.Tick(State, Rules);
             ResolveCombat(outcome);
+            MapGoldSystem.Tick(State, Rules);
 
             foreach (PlayerState player in State.Players)
             {
@@ -94,6 +97,7 @@ namespace NovaFaction.Sim
                 return;
             }
             FireDueSpawns();
+            MapGoldSystem.SpawnDueChests(State, Rules);
             if (State.ClockRemainingTicks == 0)
             {
                 OnClockExpired();
@@ -176,28 +180,52 @@ namespace NovaFaction.Sim
             pending.RemoveRange(kept, pending.Count - kept);
         }
 
+        /// <summary>
+        /// Exact income: per-second income (in raw units) goes into a carry and whole raw units move into gold, so
+        /// over any whole second the player gains exactly the per-second income. Base income and mine income have
+        /// separate carries and are added in that order; at the cap the rest is lost (mine gold first) and both
+        /// carries are cleared. Mine gold that actually arrived counts toward <see cref="PlayerState.GoldFromMap"/>.
+        /// Sudden death multiplies both.
+        /// </summary>
         private void AccrueIncome(PlayerState player)
         {
-            // Exact income: add per-second income (in raw units) to the carry, then move whole raw
-            // units into gold. Over any whole second the player gains exactly goldBaseIncomePerSecond.
-            int ticksPerSecond = Rules.TicksPerSecond;
-            Fix income = Rules.GoldBaseIncomePerSecond;
+            Fix baseIncome = Rules.GoldBaseIncomePerSecond;
+            Fix mineIncome = MapGoldSystem.MineIncome(State, Rules, player.Index);
             if (State.Phase == MatchPhase.SuddenDeath)
             {
-                income *= Rules.SuddenDeathIncomeMultiplier;
+                baseIncome *= Rules.SuddenDeathIncomeMultiplier;
+                mineIncome *= Rules.SuddenDeathIncomeMultiplier;
             }
-            long carry = player.IncomeRemainder + income.Raw;
-            long wholeRaw = carry / ticksPerSecond;
-            player.IncomeRemainder = carry - wholeRaw * ticksPerSecond;
+            long baseRemainder = player.IncomeRemainder;
+            long mineRemainder = player.MineIncomeRemainder;
+            Fix baseGold = TakeWhole(baseIncome, ref baseRemainder);
+            Fix mineGold = TakeWhole(mineIncome, ref mineRemainder);
+            player.IncomeRemainder = baseRemainder;
+            player.MineIncomeRemainder = mineRemainder;
 
-            Fix gold = player.Gold + Fix.FromRaw(wholeRaw);
+            Fix afterBase = player.Gold + baseGold;
+            Fix gold = afterBase + mineGold;
             if (gold >= Rules.GoldCap)
             {
-                // At the cap, income is lost, including the partial carry.
+                // At the cap, income is lost, including the partial carries.
                 gold = Rules.GoldCap;
                 player.IncomeRemainder = 0;
+                player.MineIncomeRemainder = 0;
+            }
+            if (gold > afterBase)
+            {
+                player.GoldFromMap += gold - afterBase;
             }
             player.Gold = gold;
+        }
+
+        private Fix TakeWhole(Fix perSecond, ref long remainder)
+        {
+            int ticksPerSecond = Rules.TicksPerSecond;
+            long carry = remainder + perSecond.Raw;
+            long wholeRaw = carry / ticksPerSecond;
+            remainder = carry - wholeRaw * ticksPerSecond;
+            return Fix.FromRaw(wholeRaw);
         }
 
         /// <summary>
@@ -284,8 +312,8 @@ namespace NovaFaction.Sim
 
         /// <summary>
         /// The design doc's tie-breaks, in order: more enemy structures destroyed; higher HP on your own weakest
-        /// structure (a destroyed structure counts as 0); more gold collected from mines and chests; a coin flip
-        /// from the match RNG.
+        /// standing structure (destroyed structures are left out, rule 1 already counted them; a player with no
+        /// standing structure counts as 0); more gold received from mines and chests; a coin flip from the match RNG.
         /// </summary>
         private void DecideByTieBreak()
         {
@@ -293,18 +321,22 @@ namespace NovaFaction.Sim
             Fix weakest0 = Fix.MaxValue, weakest1 = Fix.MaxValue;
             foreach (StructureState s in State.Structures)
             {
-                Fix hp = s.IsDestroyed ? Fix.Zero : s.Hp;
-                if (s.Owner == 0)
+                if (s.IsDestroyed)
                 {
-                    weakest0 = Fix.Min(weakest0, hp);
-                    destroyed1 += s.IsDestroyed ? 1 : 0;
+                    if (s.Owner == 0) destroyed1++;
+                    else destroyed0++;
+                }
+                else if (s.Owner == 0)
+                {
+                    weakest0 = Fix.Min(weakest0, s.Hp);
                 }
                 else
                 {
-                    weakest1 = Fix.Min(weakest1, hp);
-                    destroyed0 += s.IsDestroyed ? 1 : 0;
+                    weakest1 = Fix.Min(weakest1, s.Hp);
                 }
             }
+            if (weakest0 == Fix.MaxValue) weakest0 = Fix.Zero;
+            if (weakest1 == Fix.MaxValue) weakest1 = Fix.Zero;
             if (destroyed0 != destroyed1)
             {
                 End(destroyed0 > destroyed1 ? 0 : 1, EndReason.TieBreak, TieBreakRule.StructuresDestroyed);
@@ -315,11 +347,11 @@ namespace NovaFaction.Sim
                 End(weakest0 > weakest1 ? 0 : 1, EndReason.TieBreak, TieBreakRule.WeakestStructureHp);
                 return;
             }
-            Fix gold0 = State.GetPlayer(0).GoldCollected;
-            Fix gold1 = State.GetPlayer(1).GoldCollected;
+            Fix gold0 = State.GetPlayer(0).GoldFromMap;
+            Fix gold1 = State.GetPlayer(1).GoldFromMap;
             if (gold0 != gold1)
             {
-                End(gold0 > gold1 ? 0 : 1, EndReason.TieBreak, TieBreakRule.GoldCollected);
+                End(gold0 > gold1 ? 0 : 1, EndReason.TieBreak, TieBreakRule.GoldFromMap);
                 return;
             }
             End(State.Random.NextInt(0, 2), EndReason.TieBreak, TieBreakRule.CoinFlip);

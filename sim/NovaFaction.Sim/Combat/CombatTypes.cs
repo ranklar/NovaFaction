@@ -189,10 +189,10 @@ namespace NovaFaction.Sim.Combat
         None = 0,
         /// <summary>More enemy structures destroyed.</summary>
         StructuresDestroyed = 1,
-        /// <summary>Higher HP on the player's own weakest structure (destroyed counts as 0).</summary>
+        /// <summary>Higher HP on the player's own weakest standing structure (destroyed structures are left out).</summary>
         WeakestStructureHp = 2,
-        /// <summary>More gold collected from mines and chests.</summary>
-        GoldCollected = 3,
+        /// <summary>More gold received from mines and chests.</summary>
+        GoldFromMap = 3,
         /// <summary>A coin flip from the match RNG.</summary>
         CoinFlip = 4,
     }

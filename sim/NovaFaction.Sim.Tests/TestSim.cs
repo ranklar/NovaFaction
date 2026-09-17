@@ -9,11 +9,16 @@ namespace NovaFaction.Sim.Tests;
 /// <summary>Builds simulations with the shipped fantasy units and a default deck for both players.</summary>
 internal static class TestSim
 {
-    /// <summary>The movement and combat keys of rules.json, for tests that write rules inline.</summary>
+    /// <summary>The map gold keys of rules.json (fixed values), for tests that write rules inline.</summary>
+    internal const string MapGoldRulesJson =
+        ", \"mineCaptureRadius\": 1.5, \"mineCaptureSeconds\": 5, \"mineIncomePerSecond\": 0.05, \"mineIncomeCap\": 0.1"
+        + ", \"chestFirstSpawnSeconds\": 30, \"chestSpawnIntervalSeconds\": 30, \"chestGold\": 0.75, \"chestCollectRadius\": 0.75";
+
+    /// <summary>The movement, combat and map gold keys of rules.json, for tests that write rules inline.</summary>
     internal const string MovementRulesJson =
         ", \"unitSeparationDistance\": 0.6, \"unitSeparationPushPerSecond\": 1.5, \"unitSpawnSpacing\": 0.5"
         + ", \"unitStoppedPushFactor\": 0.3, \"aggroRadius\": 5.5, \"meleeTargetCrowdPenalty\": 1"
-        + ", \"suddenDeathIncomeMultiplier\": 2";
+        + ", \"suddenDeathIncomeMultiplier\": 2" + MapGoldRulesJson;
 
     internal static string StructuresJson() => File.ReadAllText(MatchRulesTests.ContentPath("structures.json"));
 
@@ -64,14 +69,20 @@ internal static class TestSim
     /// <summary>Rules with the shipped structure but chosen gold values and spawn delay.</summary>
     internal static MatchRules Rules(string income = "0.35", string start = "10", string cap = "10", string spawnDelay = "1",
         string separationDistance = "0.6", string push = "1.5", string spacing = "0.5", string stoppedPush = "0.3",
-        string aggro = "5.5", string crowdPenalty = "1", string matchSeconds = "180", string suddenDeathSeconds = "60") =>
+        string aggro = "5.5", string crowdPenalty = "1", string matchSeconds = "180", string suddenDeathSeconds = "60",
+        string mineRadius = "1.5", string mineSeconds = "5", string mineIncome = "0.05", string mineCap = "0.1",
+        string chestFirst = "30", string chestInterval = "30", string chestGold = "0.75", string chestRadius = "0.75") =>
         MatchRules.FromJson("{\"ticksPerSecond\": 20, \"matchLengthSeconds\": " + matchSeconds
             + ", \"suddenDeathSeconds\": " + suddenDeathSeconds + ", \"suddenDeathIncomeMultiplier\": 2, "
             + "\"goldBaseIncomePerSecond\": " + income + ", \"goldStartingAmount\": " + start + ", \"goldCap\": " + cap
             + ", \"deploySpawnDelaySeconds\": " + spawnDelay + ", \"handSize\": 4, \"deckSize\": 8"
             + ", \"unitSeparationDistance\": " + separationDistance + ", \"unitSeparationPushPerSecond\": " + push
             + ", \"unitSpawnSpacing\": " + spacing + ", \"unitStoppedPushFactor\": " + stoppedPush
-            + ", \"aggroRadius\": " + aggro + ", \"meleeTargetCrowdPenalty\": " + crowdPenalty + "}");
+            + ", \"aggroRadius\": " + aggro + ", \"meleeTargetCrowdPenalty\": " + crowdPenalty
+            + ", \"mineCaptureRadius\": " + mineRadius + ", \"mineCaptureSeconds\": " + mineSeconds
+            + ", \"mineIncomePerSecond\": " + mineIncome + ", \"mineIncomeCap\": " + mineCap
+            + ", \"chestFirstSpawnSeconds\": " + chestFirst + ", \"chestSpawnIntervalSeconds\": " + chestInterval
+            + ", \"chestGold\": " + chestGold + ", \"chestCollectRadius\": " + chestRadius + "}");
 
     internal static FixVector2 V(string x, string y) => new FixVector2(Fix.Parse(x), Fix.Parse(y));
 

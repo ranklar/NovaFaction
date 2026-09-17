@@ -22,7 +22,15 @@ public class MatchRulesTests
   ""unitStoppedPushFactor"": 0.3,
   ""unitSpawnSpacing"": 0.5,
   ""aggroRadius"": 5.5,
-  ""meleeTargetCrowdPenalty"": 1
+  ""meleeTargetCrowdPenalty"": 1,
+  ""mineCaptureRadius"": 1.5,
+  ""mineCaptureSeconds"": 5,
+  ""mineIncomePerSecond"": 0.05,
+  ""mineIncomeCap"": 0.1,
+  ""chestFirstSpawnSeconds"": 30,
+  ""chestSpawnIntervalSeconds"": 30,
+  ""chestGold"": 0.75,
+  ""chestCollectRadius"": 0.75
 }".Replace("\r\n", "\n");
 
     internal static string ContentPath(string fileName) =>
@@ -57,7 +65,17 @@ public class MatchRulesTests
             "goldBaseIncomePerSecond", "goldStartingAmount",
             "unitSeparationDistance", "unitSeparationPushPerSecond", "unitStoppedPushFactor", "unitSpawnSpacing",
             "aggroRadius", "meleeTargetCrowdPenalty",
+            "mineCaptureRadius", "mineCaptureSeconds", "mineIncomePerSecond", "mineIncomeCap",
+            "chestFirstSpawnSeconds", "chestSpawnIntervalSeconds", "chestGold", "chestCollectRadius",
         }, rules.TuningPlaceholders);
+
+        // Map gold: tick conversions and the cross-field limits hold for the shipped values.
+        Assert.Equal(100, rules.MineCaptureTicks);
+        Assert.Equal(600, rules.ChestFirstSpawnTick);
+        Assert.Equal(600, rules.ChestSpawnIntervalTicks);
+        Assert.True(rules.MineIncomeCap >= rules.MineIncomePerSecond);
+        Assert.True((rules.GoldBaseIncomePerSecond + rules.MineIncomeCap) * rules.SuddenDeathIncomeMultiplier <= rules.GoldCap);
+        Assert.True(rules.ChestGold > Fix.Zero && rules.ChestCollectRadius > Fix.Zero);
         Assert.Equal(Fix.FromInt(2), rules.SuddenDeathIncomeMultiplier);
         Assert.True(rules.UnitStoppedPushFactor > Fix.Zero && rules.UnitStoppedPushFactor < Fix.One);
         Assert.True(rules.AggroRadius > Fix.Zero);
@@ -100,6 +118,14 @@ public class MatchRulesTests
     [InlineData("unitStoppedPushFactor")]
     [InlineData("aggroRadius")]
     [InlineData("meleeTargetCrowdPenalty")]
+    [InlineData("mineCaptureRadius")]
+    [InlineData("mineCaptureSeconds")]
+    [InlineData("mineIncomePerSecond")]
+    [InlineData("mineIncomeCap")]
+    [InlineData("chestFirstSpawnSeconds")]
+    [InlineData("chestSpawnIntervalSeconds")]
+    [InlineData("chestGold")]
+    [InlineData("chestCollectRadius")]
     public void MissingKey_IsRejected(string key)
     {
         string json = string.Join("\n", ValidJson.Split('\n').Where(line => !line.Contains("\"" + key + "\"")));
@@ -133,6 +159,23 @@ public class MatchRulesTests
     [InlineData("\"aggroRadius\": 5.5", "\"aggroRadius\": 100", "at most 64")]
     [InlineData("\"meleeTargetCrowdPenalty\": 1", "\"meleeTargetCrowdPenalty\": -1", "at least")]
     [InlineData("\"suddenDeathIncomeMultiplier\": 2", "\"suddenDeathIncomeMultiplier\": 30", "must not exceed goldCap")]
+    [InlineData("\"mineCaptureRadius\": 1.5", "\"mineCaptureRadius\": 0", "at least")]
+    [InlineData("\"mineCaptureRadius\": 1.5", "\"mineCaptureRadius\": 65", "at most 64")]
+    [InlineData("\"mineCaptureSeconds\": 5", "\"mineCaptureSeconds\": 0", "at least")]
+    [InlineData("\"mineCaptureSeconds\": 5", "\"mineCaptureSeconds\": 5.01", "whole number of ticks")]
+    [InlineData("\"mineIncomePerSecond\": 0.05", "\"mineIncomePerSecond\": -0.05", "at least")]
+    [InlineData("\"mineIncomePerSecond\": 0.05", "\"mineIncomePerSecond\": 11", "mineIncomePerSecond must not exceed goldCap")]
+    [InlineData("\"mineIncomeCap\": 0.1", "\"mineIncomeCap\": -1", "at least")]
+    [InlineData("\"mineIncomeCap\": 0.1", "\"mineIncomeCap\": 9.9", "goldBaseIncomePerSecond + mineIncomeCap")]
+    [InlineData("\"mineIncomeCap\": 0.1", "\"mineIncomeCap\": 4.9", "* suddenDeathIncomeMultiplier must not exceed goldCap")]
+    [InlineData("\"chestFirstSpawnSeconds\": 30", "\"chestFirstSpawnSeconds\": -1", "at least")]
+    [InlineData("\"chestFirstSpawnSeconds\": 30", "\"chestFirstSpawnSeconds\": 30.01", "whole number of ticks")]
+    [InlineData("\"chestSpawnIntervalSeconds\": 30", "\"chestSpawnIntervalSeconds\": 0", "at least")]
+    [InlineData("\"chestSpawnIntervalSeconds\": 30", "\"chestSpawnIntervalSeconds\": 0.01", "whole number of ticks")]
+    [InlineData("\"chestGold\": 0.75", "\"chestGold\": -1", "at least")]
+    [InlineData("\"chestGold\": 0.75", "\"chestGold\": 11", "chestGold must not exceed goldCap")]
+    [InlineData("\"chestCollectRadius\": 0.75", "\"chestCollectRadius\": 0", "at least")]
+    [InlineData("\"chestCollectRadius\": 0.75", "\"chestCollectRadius\": 64.5", "at most 64")]
     public void InvalidValues_AreRejected(string original, string replacement, string fragment)
     {
         Assert.Contains(original, ValidJson);

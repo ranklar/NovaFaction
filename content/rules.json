@@ -15,6 +15,14 @@
   "unitSpawnSpacing": 0.5,
   "aggroRadius": 5.5,
   "meleeTargetCrowdPenalty": 1,
+  "mineCaptureRadius": 1.5,
+  "mineCaptureSeconds": 5,
+  "mineIncomePerSecond": 0.05,
+  "mineIncomeCap": 0.1,
+  "chestFirstSpawnSeconds": 30,
+  "chestSpawnIntervalSeconds": 30,
+  "chestGold": 0.75,
+  "chestCollectRadius": 0.75,
   "tuningPlaceholders": [
     "goldBaseIncomePerSecond",
     "goldStartingAmount",
@@ -23,6 +31,14 @@
     "unitStoppedPushFactor",
     "unitSpawnSpacing",
     "aggroRadius",
-    "meleeTargetCrowdPenalty"
+    "meleeTargetCrowdPenalty",
+    "mineCaptureRadius",
+    "mineCaptureSeconds",
+    "mineIncomePerSecond",
+    "mineIncomeCap",
+    "chestFirstSpawnSeconds",
+    "chestSpawnIntervalSeconds",
+    "chestGold",
+    "chestCollectRadius"
   ]
 }

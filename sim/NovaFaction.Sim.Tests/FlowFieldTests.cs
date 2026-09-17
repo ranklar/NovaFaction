@@ -266,8 +266,9 @@ public class FlowFieldTests
 
     private static readonly string[] PinnedTwoLaneFingerprints =
     {
-        "582F69BE4632F37D", "84115D1773558CAF", "6D568973359C9032",
-        "7D0CB1DF849E55CD", "CF2D649763BA6985", "8E9BAAA006E23684",
+        // Updated Sept 2026: mine cells became blocked.
+        "58CBF0BD74A51FBE", "9BA33E146BB9F222", "3B9FCE5CEDF5CF3D",
+        "D4AEE46E49733E76", "B3D235625E5261D1", "14ED33D2F2FD1EE1",
     };
 
     [Fact]

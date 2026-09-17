@@ -174,7 +174,10 @@ public class MapStateTests
             b.Tick(log.GetCommands(tick));
             Assert.Equal(a.ComputeHash(), b.ComputeHash());
         }
-        Assert.Equal(new CellRect[] { a.Map.Structures[1].UnlocksDeployZone!.Value }, a.State.Map.GetUnlockedZones(1));
-        Assert.Equal(new CellRect[] { a.Map.Structures[5].UnlocksDeployZone!.Value }, a.State.Map.GetUnlockedZones(0));
+        // Combat may destroy more structures than the script; the scripted ones must be unlocked either way.
+        Assert.Contains(a.Map.Structures[1].UnlocksDeployZone!.Value, a.State.Map.GetUnlockedZones(1));
+        Assert.Contains(a.Map.Structures[5].UnlocksDeployZone!.Value, a.State.Map.GetUnlockedZones(0));
+        Assert.Equal(a.State.Map.GetUnlockedZones(0), b.State.Map.GetUnlockedZones(0));
+        Assert.Equal(a.State.Map.GetUnlockedZones(1), b.State.Map.GetUnlockedZones(1));
     }
 }

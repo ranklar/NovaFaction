@@ -91,6 +91,33 @@ Themed factions released over time as content packs; fantasy faction first.
   - SimRandom = PCG32 (XSH-RR, reference stream 54), state is a single ulong (GetState/SetState)
     for state hashes and replays. NextInt is unbiased (rejection sampling). Chance always consumes
     exactly one draw. Changing the algorithm breaks saved replays; a test pins reference output.
+- Sim match loop (sim/NovaFaction.Sim):
+  - content/rules.json holds match-wide rules (tick rate, clock, sudden death, gold income/start/cap,
+    spawn delay, hand and deck size). Every key is required; unknown keys are errors. JSON has no
+    comments, so values that are still guesses are listed by name in "tuningPlaceholders".
+    Current placeholders: base income 0.35 gold/s (about Clash Royale's pace) and 5 starting gold.
+    The spawn delay must be a whole number of ticks. handSize must be less than deckSize.
+  - SimJson: strict RFC 8259 reader, no dependencies. Numbers stay as text until read as int/long or
+    Fix (exponents are valid JSON but rejected as Fix). Errors carry file name, line and column.
+    Duplicate keys are errors; a leading byte-order mark is allowed; nesting max 64.
+    The sim takes JSON text, not file paths, so the client can load it however Unity needs.
+  - Command = tick, player (0/1), per-player sequence number, type (None, DeployCard,
+    LeaderAbility), hand slot (-1 when unused), target. Canonical order: tick, player, sequence.
+    Malformed commands (bad player/slot/type, wrong tick, duplicate player+sequence) make Tick()
+    throw with state unchanged; they are input-layer bugs, not gameplay. Game-rule rejections
+    (not enough gold, outside deploy zone) will be deterministic no-ops when those features land.
+  - Simulation.Tick(commands) order: validate, record in the CommandLog, apply commands in
+    canonical order, accrue income, advance tick and clock, handle clock expiry.
+    Tick N's commands must be stamped N (State.Tick before the call). A 3:00 match is 3600 ticks.
+  - Income is exact: each tick adds income/ticksPerSecond with the sub-raw remainder carried per
+    player, so a player gains exactly the per-second income every whole second. At the cap the
+    carry is discarded (a capped player banks nothing).
+  - Clock expiry: Regulation -> Ended for now. Scoring, sudden death and Keep kills are TODO.
+  - State hash: 64-bit FNV-1a over little-endian bytes, starting with a hash format version.
+    Covers tick, RNG state, clock, phase, and per player: gold raw, income carry, score, command
+    count. New state implements IStateHashable and appends count-then-items in id order.
+    A test pins the hash of a scripted full match; change it only on purpose.
+  - Replay = rules + seed + CommandLog (Simulation.Replay). The log is in memory only for now.
 - server/: ASP.NET Core (C#). Accounts, economy, matchmaking, input relay, match verification by
   re-running the sim. PostgreSQL. Runs on the Windows desktop for LAN testing; cloud container later.
 - content/: JSON data for units, factions, maps, missions. Art in Addressables bundles per theme.
@@ -110,3 +137,5 @@ Themed factions released over time as content packs; fantasy faction first.
 - Studio name and Android package identifier.
 - Fantasy roster: the 16 units and 2 leaders.
 - Income, cost and match-length numbers (tune in the headless harness).
+- Sudden death that ends with no damage dealt: the rules say "no draws" but name no tie-break.
+- CommandLog file format for saved replays and server verification.

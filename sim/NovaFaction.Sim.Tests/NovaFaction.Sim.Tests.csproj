@@ -19,6 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The real content file, so tests load exactly what ships. -->
+    <None Include="..\..\content\rules.json" Link="content\rules.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\NovaFaction.Sim\NovaFaction.Sim.csproj" />
   </ItemGroup>
 

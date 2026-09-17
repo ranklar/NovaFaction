@@ -1,0 +1,15 @@
+{
+  "ticksPerSecond": 20,
+  "matchLengthSeconds": 180,
+  "suddenDeathSeconds": 60,
+  "goldBaseIncomePerSecond": 0.35,
+  "goldStartingAmount": 5,
+  "goldCap": 10,
+  "deploySpawnDelaySeconds": 1,
+  "handSize": 4,
+  "deckSize": 8,
+  "tuningPlaceholders": [
+    "goldBaseIncomePerSecond",
+    "goldStartingAmount"
+  ]
+}

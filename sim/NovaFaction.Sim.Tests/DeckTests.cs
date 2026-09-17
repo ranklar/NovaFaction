@@ -37,8 +37,8 @@ public class DeckTests
         UnitRoster roster = Fantasy;
         Deck a = Deck.Create(roster, TestSim.DefaultDeckIds, 8);
         Deck b = Deck.Create(roster, TestSim.DefaultDeckIds.Reverse().ToArray(), 8);
-        var simA = new Simulation(new MatchSetup(rules, MapTestData.LoadTwoLane(), a, a), 5);
-        var simB = new Simulation(new MatchSetup(rules, MapTestData.LoadTwoLane(), b, b), 5);
+        var simA = new Simulation(new MatchSetup(rules, MapTestData.LoadTwoLane(), TestSim.LoadStructures(), a, a), 5);
+        var simB = new Simulation(new MatchSetup(rules, MapTestData.LoadTwoLane(), TestSim.LoadStructures(), b, b), 5);
         Assert.Equal(simA.ComputeHash(), simB.ComputeHash());
     }
 
@@ -85,23 +85,23 @@ public class DeckTests
         UnitRoster roster = ExtendedRoster();
         Deck nine = Deck.Create(roster, TestSim.DefaultDeckIds.Concat(new[] { "grunt" }).ToArray(), 9);
         Deck eight = Deck.Create(roster, TestSim.DefaultDeckIds, 8);
-        Assert.Throws<ArgumentException>(() => new MatchSetup(rules, MapTestData.LoadTwoLane(), eight, nine));
-        Assert.Throws<ArgumentNullException>(() => new MatchSetup(rules, MapTestData.LoadTwoLane(), eight, null!));
+        Assert.Throws<ArgumentException>(() => new MatchSetup(rules, MapTestData.LoadTwoLane(), TestSim.LoadStructures(), eight, nine));
+        Assert.Throws<ArgumentNullException>(() => new MatchSetup(rules, MapTestData.LoadTwoLane(), TestSim.LoadStructures(), eight, null!));
     }
 
     [Fact]
     public void Setup_RejectsUnitsTooFastForTheTickRate()
     {
         MatchRules rules = MatchRulesTests.LoadShippedRules();
-        // Half a cell (0.5) per tick at 20 ticks/s = 10 units/s, including the 1.5 separation push.
-        UnitRoster fast = UnitRoster.FromJson(TestSim.FantasyUnitsJson().Replace("\"moveSpeed\": 2,", "\"moveSpeed\": 8.6,"));
+        // Half a cell (0.5) per tick at 20 ticks/s = 10 units/s, including the 1.5 separation push times (2 + 0.3): moving push, weak stopped push and sideways slide.
+        UnitRoster fast = UnitRoster.FromJson(TestSim.FantasyUnitsJson().Replace("\"moveSpeed\": 2,", "\"moveSpeed\": 6.56,"));
         Deck deck = Deck.Create(fast, TestSim.DefaultDeckIds, 8);
-        var ex = Assert.Throws<ArgumentException>(() => new MatchSetup(rules, MapTestData.LoadTwoLane(), deck, deck));
+        var ex = Assert.Throws<ArgumentException>(() => new MatchSetup(rules, MapTestData.LoadTwoLane(), TestSim.LoadStructures(), deck, deck));
         Assert.Contains("fire_spirit", ex.Message);
 
-        UnitRoster ok = UnitRoster.FromJson(TestSim.FantasyUnitsJson().Replace("\"moveSpeed\": 2,", "\"moveSpeed\": 8.5,"));
+        UnitRoster ok = UnitRoster.FromJson(TestSim.FantasyUnitsJson().Replace("\"moveSpeed\": 2,", "\"moveSpeed\": 6.54,"));
         Deck okDeck = Deck.Create(ok, TestSim.DefaultDeckIds, 8);
-        _ = new MatchSetup(rules, MapTestData.LoadTwoLane(), okDeck, okDeck);
+        _ = new MatchSetup(rules, MapTestData.LoadTwoLane(), TestSim.LoadStructures(), okDeck, okDeck);
     }
 }
 

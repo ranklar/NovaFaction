@@ -21,6 +21,7 @@
   <ItemGroup>
     <!-- The real content file, so tests load exactly what ships. -->
     <None Include="..\..\content\rules.json" Link="content\rules.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\content\structures.json" Link="content\structures.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\content\maps\*.json" Link="content\maps\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\content\factions\fantasy\units.json" Link="content\factions\fantasy\units.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

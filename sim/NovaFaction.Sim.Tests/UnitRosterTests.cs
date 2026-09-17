@@ -20,6 +20,7 @@ public class UnitRosterTests
         + "      \"range\": 0.5,\n"
         + "      \"moveSpeed\": 1,\n"
         + "      \"targets\": \"ground\",\n"
+        + "      \"targetPriority\": \"any\",\n"
         + "      \"isFlying\": false,\n"
         + "      \"spawnCount\": 1,\n"
         + "      \"isLeader\": false";
@@ -57,6 +58,14 @@ public class UnitRosterTests
         Assert.Equal(Fix.Parse("1.3"), griffin.AttackIntervalSeconds);
         Assert.Equal(Fix.Parse("1.5"), griffin.MoveSpeed);
 
+        // Combat data: only the archer and the catapult shoot; the catapult and the fire spirit splash; the
+        // golem and the catapult only go for structures.
+        Assert.Equal(new[] { "elf_archer", "catapult" }, roster.Units.Where(u => u.IsRanged).Select(u => u.Id));
+        Assert.Equal(new[] { "catapult", "fire_spirit" }, roster.Units.Where(u => u.SplashRadius > Fix.Zero).Select(u => u.Id));
+        Assert.Equal(new[] { "stone_golem", "catapult" },
+            roster.Units.Where(u => u.TargetPriority == TargetPriority.StructuresOnly).Select(u => u.Id));
+        Assert.True(roster.Get("elf_archer").ProjectileSpeed > Fix.Zero);
+
         Assert.Equal(TargetLayer.Ground, roster.Get("catapult").Targets);
         Assert.Equal(5, roster.Get("catapult").Cost);
         Assert.Equal(Fix.Parse("6.5"), roster.Get("catapult").Range);
@@ -80,6 +89,18 @@ public class UnitRosterTests
         Assert.Equal("grunt", grunt.Id);
         Assert.False(grunt.IsPlaceholder); // "placeholder" is optional
         Assert.False(grunt.IsLeader);
+        // Projectile speed and splash are optional: without them a unit is melee with single-target hits.
+        Assert.Equal(TargetPriority.Any, grunt.TargetPriority);
+        Assert.False(grunt.IsRanged);
+        Assert.Equal(Fix.Zero, grunt.ProjectileSpeed);
+        Assert.Equal(Fix.Zero, grunt.SplashRadius);
+
+        UnitDefinition shooter = UnitRoster.FromJson(OneUnitJson(DefaultUnitBody.Replace("\"any\"", "\"structuresOnly\"")
+            + ",\n      \"projectileSpeed\": 7.5,\n      \"splashRadius\": 1")).Units[0];
+        Assert.Equal(TargetPriority.StructuresOnly, shooter.TargetPriority);
+        Assert.True(shooter.IsRanged);
+        Assert.Equal(Fix.Parse("7.5"), shooter.ProjectileSpeed);
+        Assert.Equal(Fix.One, shooter.SplashRadius);
     }
 
     [Fact]
@@ -90,6 +111,9 @@ public class UnitRosterTests
         Assert.Equal(hash, UnitRoster.FromJson(json.Replace("\n", "\r\n")).ContentHash);
         Assert.NotEqual(hash, UnitRoster.FromJson(json.Replace("\"hp\": 100", "\"hp\": 100.5")).ContentHash);
         Assert.NotEqual(hash, UnitRoster.FromJson(json.Replace("\"Grunt\"", "\"Grunt2\"")).ContentHash);
+        Assert.NotEqual(hash, UnitRoster.FromJson(json.Replace("\"any\"", "\"structuresOnly\"")).ContentHash);
+        Assert.NotEqual(hash, UnitRoster.FromJson(json.Replace("\"isLeader\": false", "\"isLeader\": false, \"projectileSpeed\": 5")).ContentHash);
+        Assert.NotEqual(hash, UnitRoster.FromJson(json.Replace("\"isLeader\": false", "\"isLeader\": false, \"splashRadius\": 5")).ContentHash);
     }
 
     [Fact]
@@ -115,6 +139,11 @@ public class UnitRosterTests
     [InlineData("\"range\": 0.5", "\"range\": 0", "range must be greater than 0")]
     [InlineData("\"moveSpeed\": 1", "\"moveSpeed\": -1", "moveSpeed must not be negative")]
     [InlineData("\"targets\": \"ground\"", "\"targets\": \"sea\"", "targets must be one of")]
+    [InlineData("\"targetPriority\": \"any\"", "\"targetPriority\": \"units\"", "targetPriority must be one of")]
+    [InlineData("\"targetPriority\": \"any\",", "", "missing required key \"targetPriority\"")]
+    [InlineData("\"isLeader\": false", "\"isLeader\": false, \"projectileSpeed\": 0", "projectileSpeed must be greater than 0")]
+    [InlineData("\"isLeader\": false", "\"isLeader\": false, \"splashRadius\": 0", "splashRadius must be greater than 0")]
+    [InlineData("\"isLeader\": false", "\"isLeader\": false, \"splashRadius\": -1", "splashRadius must be greater than 0")]
     [InlineData("\"isFlying\": false", "\"isFlying\": 0", "expected")]
     [InlineData("\"spawnCount\": 1", "\"spawnCount\": 0", "spawnCount must be between 1 and")]
     [InlineData("\"spawnCount\": 1", "\"spawnCount\": 26", "spawnCount must be between 1 and")]

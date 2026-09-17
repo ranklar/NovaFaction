@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using NovaFaction.Sim.Cards;
+using NovaFaction.Sim.Combat;
 using NovaFaction.Sim.Commands;
 using NovaFaction.Sim.Content;
 using NovaFaction.Sim.Map;
@@ -42,9 +43,10 @@ namespace NovaFaction.Sim
         /// <summary>
         /// Advances one tick. Every command must be stamped with <c>State.Tick</c> and be well-formed
         /// (see <see cref="Command.Validate"/>); otherwise this throws and the state is unchanged.
-        /// Order of work: apply commands (canonical order), create units of zero-delay deploys, move
-        /// units, accrue income, advance the tick and clock, create units whose spawn delay is over,
-        /// then handle clock expiry. A deploy on tick N with a delay of D ticks therefore creates its
+        /// Order of work: apply commands (canonical order), create units of zero-delay deploys, run combat
+        /// and movement (<see cref="BattleSystem"/>), resolve Keep kills and sudden-death damage, accrue
+        /// income, advance the tick and clock, then (unless the match just ended) create units whose spawn
+        /// delay is over and handle clock expiry. A deploy on tick N with a delay of D ticks therefore creates its
         /// units at time N + D: for D &gt; 0 they are in the state once <c>State.Tick</c> reaches N + D
         /// and have not moved yet; for D = 0 they appear during tick N and already move on it.
         /// </summary>
@@ -77,7 +79,8 @@ namespace NovaFaction.Sim
             }
             FireDueSpawns(); // only zero-delay deploys from this tick are due here
 
-            UnitMovement.Tick(State, Rules);
+            BattleOutcome outcome = BattleSystem.Tick(State, Rules);
+            ResolveCombat(outcome);
 
             foreach (PlayerState player in State.Players)
             {
@@ -86,6 +89,10 @@ namespace NovaFaction.Sim
 
             State.Tick++;
             State.ClockRemainingTicks--;
+            if (IsEnded)
+            {
+                return;
+            }
             FireDueSpawns();
             if (State.ClockRemainingTicks == 0)
             {
@@ -174,7 +181,12 @@ namespace NovaFaction.Sim
             // Exact income: add per-second income (in raw units) to the carry, then move whole raw
             // units into gold. Over any whole second the player gains exactly goldBaseIncomePerSecond.
             int ticksPerSecond = Rules.TicksPerSecond;
-            long carry = player.IncomeRemainder + Rules.GoldBaseIncomePerSecond.Raw;
+            Fix income = Rules.GoldBaseIncomePerSecond;
+            if (State.Phase == MatchPhase.SuddenDeath)
+            {
+                income *= Rules.SuddenDeathIncomeMultiplier;
+            }
+            long carry = player.IncomeRemainder + income.Raw;
             long wholeRaw = carry / ticksPerSecond;
             player.IncomeRemainder = carry - wholeRaw * ticksPerSecond;
 
@@ -188,24 +200,137 @@ namespace NovaFaction.Sim
             player.Gold = gold;
         }
 
+        /// <summary>
+        /// A destroyed Keep ends the match at once in the attacker's favor. If both Keeps fall on the same tick,
+        /// the score decides (then the tie-break list). In sudden death, the first tick with any structure
+        /// damage ends the match: the player who removed more structure HP that tick wins (the tie-break list
+        /// if both removed the same amount).
+        /// </summary>
+        private void ResolveCombat(BattleOutcome outcome)
+        {
+            bool[] keepFell = { false, false };
+            foreach (int index in outcome.DestroyedStructures)
+            {
+                StructureDefinition structure = Map.Structures[index];
+                if (structure.Kind == StructureKind.Keep)
+                {
+                    keepFell[structure.Owner] = true;
+                }
+            }
+            if (keepFell[0] && keepFell[1])
+            {
+                DecideByScore();
+                return;
+            }
+            if (keepFell[0] || keepFell[1])
+            {
+                End(keepFell[0] ? 1 : 0, EndReason.KeepDestroyed, TieBreakRule.None);
+                return;
+            }
+
+            Fix damage0 = outcome.StructureDamage[0];
+            Fix damage1 = outcome.StructureDamage[1];
+            if (State.Phase == MatchPhase.SuddenDeath && (damage0 > Fix.Zero || damage1 > Fix.Zero))
+            {
+                if (damage0 == damage1)
+                {
+                    DecideByTieBreak();
+                }
+                else
+                {
+                    End(damage0 > damage1 ? 0 : 1, EndReason.FirstDamage, TieBreakRule.None);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Regulation over: the higher score wins; an exact tie starts sudden death (or goes straight to the
+        /// tie-break list if sudden death lasts 0 s). Sudden death over with no damage: the tie-break list.
+        /// </summary>
         private void OnClockExpired()
         {
             switch (State.Phase)
             {
                 case MatchPhase.Regulation:
-                    // TODO(scoring): if a Keep fell the match already ended. Otherwise compare damage
-                    // scores: higher score wins; on an exact tie enter sudden death:
-                    //     State.Phase = MatchPhase.SuddenDeath;
-                    //     State.ClockRemainingTicks = Rules.SuddenDeathTicks;
-                    // Until scoring exists, regulation always ends the match.
-                    State.Phase = MatchPhase.Ended;
+                    if (State.GetPlayer(0).Score != State.GetPlayer(1).Score || Rules.SuddenDeathTicks == 0)
+                    {
+                        DecideByScore();
+                    }
+                    else
+                    {
+                        State.Phase = MatchPhase.SuddenDeath;
+                        State.ClockRemainingTicks = Rules.SuddenDeathTicks;
+                    }
                     break;
                 case MatchPhase.SuddenDeath:
-                    // TODO(scoring): the design says "no draws"; decide the tie-break when sudden
-                    // death expires with no damage dealt (see docs/design.md open items).
-                    State.Phase = MatchPhase.Ended;
+                    DecideByTieBreak();
                     break;
             }
+        }
+
+        private void DecideByScore()
+        {
+            Fix score0 = State.GetPlayer(0).Score;
+            Fix score1 = State.GetPlayer(1).Score;
+            if (score0 == score1)
+            {
+                DecideByTieBreak();
+            }
+            else
+            {
+                End(score0 > score1 ? 0 : 1, EndReason.Score, TieBreakRule.None);
+            }
+        }
+
+        /// <summary>
+        /// The design doc's tie-breaks, in order: more enemy structures destroyed; higher HP on your own weakest
+        /// structure (a destroyed structure counts as 0); more gold collected from mines and chests; a coin flip
+        /// from the match RNG.
+        /// </summary>
+        private void DecideByTieBreak()
+        {
+            int destroyed0 = 0, destroyed1 = 0;
+            Fix weakest0 = Fix.MaxValue, weakest1 = Fix.MaxValue;
+            foreach (StructureState s in State.Structures)
+            {
+                Fix hp = s.IsDestroyed ? Fix.Zero : s.Hp;
+                if (s.Owner == 0)
+                {
+                    weakest0 = Fix.Min(weakest0, hp);
+                    destroyed1 += s.IsDestroyed ? 1 : 0;
+                }
+                else
+                {
+                    weakest1 = Fix.Min(weakest1, hp);
+                    destroyed0 += s.IsDestroyed ? 1 : 0;
+                }
+            }
+            if (destroyed0 != destroyed1)
+            {
+                End(destroyed0 > destroyed1 ? 0 : 1, EndReason.TieBreak, TieBreakRule.StructuresDestroyed);
+                return;
+            }
+            if (weakest0 != weakest1)
+            {
+                End(weakest0 > weakest1 ? 0 : 1, EndReason.TieBreak, TieBreakRule.WeakestStructureHp);
+                return;
+            }
+            Fix gold0 = State.GetPlayer(0).GoldCollected;
+            Fix gold1 = State.GetPlayer(1).GoldCollected;
+            if (gold0 != gold1)
+            {
+                End(gold0 > gold1 ? 0 : 1, EndReason.TieBreak, TieBreakRule.GoldCollected);
+                return;
+            }
+            End(State.Random.NextInt(0, 2), EndReason.TieBreak, TieBreakRule.CoinFlip);
+        }
+
+        private void End(int winner, EndReason reason, TieBreakRule rule)
+        {
+            State.Phase = MatchPhase.Ended;
+            State.Winner = winner;
+            State.EndReason = reason;
+            State.TieBreakRule = rule;
         }
     }
 }

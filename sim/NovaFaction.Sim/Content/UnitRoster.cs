@@ -28,12 +28,21 @@ namespace NovaFaction.Sim.Content
         Both = 2,
     }
 
+    /// <summary>What a unit looks for when it scans for something to attack.</summary>
+    public enum TargetPriority
+    {
+        /// <summary>The nearest enemy unit or structure it can hit.</summary>
+        Any = 0,
+        /// <summary>Only structures (e.g. a siege engine or a building-hunting tank).</summary>
+        StructuresOnly = 1,
+    }
+
     /// <summary>One card/unit type from a faction's units.json. Immutable.</summary>
     public sealed class UnitDefinition
     {
         internal UnitDefinition(int index, string id, string displayName, UnitSlot slot, int cost, Fix hp, Fix damage,
-            Fix attackIntervalSeconds, Fix range, Fix moveSpeed, TargetLayer targets, bool isFlying, int spawnCount,
-            bool isLeader, bool isPlaceholder)
+            Fix attackIntervalSeconds, Fix range, Fix moveSpeed, TargetLayer targets, TargetPriority targetPriority,
+            bool isFlying, int spawnCount, Fix projectileSpeed, Fix splashRadius, bool isLeader, bool isPlaceholder)
         {
             Index = index;
             Id = id;
@@ -46,8 +55,11 @@ namespace NovaFaction.Sim.Content
             Range = range;
             MoveSpeed = moveSpeed;
             Targets = targets;
+            TargetPriority = targetPriority;
             IsFlying = isFlying;
             SpawnCount = spawnCount;
+            ProjectileSpeed = projectileSpeed;
+            SplashRadius = splashRadius;
             IsLeader = isLeader;
             IsPlaceholder = isPlaceholder;
         }
@@ -68,7 +80,7 @@ namespace NovaFaction.Sim.Content
         /// <summary>Maximum hit points of each spawned unit.</summary>
         public Fix Hp { get; }
 
-        /// <summary>Damage per attack (not used until combat lands).</summary>
+        /// <summary>Damage per attack.</summary>
         public Fix Damage { get; }
 
         public Fix AttackIntervalSeconds { get; }
@@ -84,11 +96,25 @@ namespace NovaFaction.Sim.Content
 
         public TargetLayer Targets { get; }
 
+        /// <summary>Whether the unit also targets enemy units, or only structures.</summary>
+        public TargetPriority TargetPriority { get; }
+
         /// <summary>Flying units ignore terrain and move in straight lines.</summary>
         public bool IsFlying { get; }
 
         /// <summary>Units created per deploy (1 for most, more for swarms).</summary>
         public int SpawnCount { get; }
+
+        /// <summary>
+        /// World units per second of the unit's projectile. Zero (the default when the file omits it) means
+        /// melee: damage lands the moment the unit attacks.
+        /// </summary>
+        public Fix ProjectileSpeed { get; }
+
+        /// <summary>Radius of area damage around the impact point; zero (the default) hits only the target.</summary>
+        public Fix SplashRadius { get; }
+
+        public bool IsRanged => ProjectileSpeed > Fix.Zero;
 
         public bool IsLeader { get; }
 
@@ -107,8 +133,11 @@ namespace NovaFaction.Sim.Content
             h.Add(Range);
             h.Add(MoveSpeed);
             h.Add((int)Targets);
+            h.Add((int)TargetPriority);
             h.Add(IsFlying);
             h.Add(SpawnCount);
+            h.Add(ProjectileSpeed);
+            h.Add(SplashRadius);
             h.Add(IsLeader);
         }
     }
@@ -132,16 +161,21 @@ namespace NovaFaction.Sim.Content
         private static readonly string[] RootKeys = { KeyFormatVersion, KeyFaction, KeyUnits };
 
         private const string KeyPlaceholder = "placeholder";
+        private const string KeyProjectileSpeed = "projectileSpeed";
+        private const string KeySplashRadius = "splashRadius";
         private static readonly string[] UnitKeys =
         {
             "id", "displayName", "slot", "cost", "hp", "damage", "attackIntervalSeconds", "range", "moveSpeed",
-            "targets", "isFlying", "spawnCount", "isLeader",
+            "targets", "targetPriority", "isFlying", "spawnCount", "isLeader",
         };
+        private static readonly string[] OptionalUnitKeys = { KeyPlaceholder, KeyProjectileSpeed, KeySplashRadius };
 
         private static readonly string[] SlotNames =
             { "tank", "bruiser", "swarm", "ranged", "flyer", "siege", "support", "spell", "building", "leader" };
 
-        private static readonly string[] TargetNames = { "ground", "air", "both" };
+        internal static readonly string[] TargetNames = { "ground", "air", "both" };
+
+        private static readonly string[] PriorityNames = { "any", "structuresOnly" };
 
         private UnitDefinition[] _units = Array.Empty<UnitDefinition>();
 
@@ -234,7 +268,7 @@ namespace NovaFaction.Sim.Content
             {
                 throw item.Error("each unit must be a JSON object.");
             }
-            CheckKeys(item, UnitKeys, new[] { KeyPlaceholder }, "unit");
+            CheckKeys(item, UnitKeys, OptionalUnitKeys, "unit");
 
             JsonValue idValue = item.Get("id");
             string id = idValue.AsString();
@@ -253,6 +287,7 @@ namespace NovaFaction.Sim.Content
 
             var slot = (UnitSlot)ReadName(item.Get("slot"), SlotNames, what + "slot");
             var targets = (TargetLayer)ReadName(item.Get("targets"), TargetNames, what + "targets");
+            var priority = (TargetPriority)ReadName(item.Get("targetPriority"), PriorityNames, what + "targetPriority");
 
             JsonValue costValue = item.Get("cost");
             int cost = costValue.AsInt();
@@ -266,6 +301,12 @@ namespace NovaFaction.Sim.Content
             Fix interval = ReadStat(item, "attackIntervalSeconds", what, allowZero: false);
             Fix range = ReadStat(item, "range", what, allowZero: false);
             Fix moveSpeed = ReadStat(item, "moveSpeed", what, allowZero: true);
+            Fix projectileSpeed = item.TryGet(KeyProjectileSpeed, out _)
+                ? ReadStat(item, KeyProjectileSpeed, what, allowZero: false)
+                : Fix.Zero;
+            Fix splashRadius = item.TryGet(KeySplashRadius, out _)
+                ? ReadStat(item, KeySplashRadius, what, allowZero: false)
+                : Fix.Zero;
 
             JsonValue countValue = item.Get("spawnCount");
             int spawnCount = countValue.AsInt();
@@ -284,10 +325,10 @@ namespace NovaFaction.Sim.Content
 
             bool placeholder = item.TryGet(KeyPlaceholder, out JsonValue p) && p.AsBool();
             return new UnitDefinition(index, id, displayName, slot, cost, hp, damage, interval, range, moveSpeed,
-                targets, isFlying, spawnCount, isLeader, placeholder);
+                targets, priority, isFlying, spawnCount, projectileSpeed, splashRadius, isLeader, placeholder);
         }
 
-        private static int ReadName(JsonValue value, string[] names, string what)
+        internal static int ReadName(JsonValue value, string[] names, string what)
         {
             string text = value.AsString();
             int i = Array.IndexOf(names, text);
@@ -298,7 +339,7 @@ namespace NovaFaction.Sim.Content
             return i;
         }
 
-        private static Fix ReadStat(JsonValue item, string key, string what, bool allowZero)
+        internal static Fix ReadStat(JsonValue item, string key, string what, bool allowZero)
         {
             JsonValue value = item.Get(key);
             Fix result = value.AsFix();
@@ -313,7 +354,7 @@ namespace NovaFaction.Sim.Content
             return result;
         }
 
-        private static void CheckKeys(JsonValue obj, string[] required, string[] optional, string what)
+        internal static void CheckKeys(JsonValue obj, string[] required, string[] optional, string what)
         {
             foreach (KeyValuePair<string, JsonValue> member in obj.Members)
             {

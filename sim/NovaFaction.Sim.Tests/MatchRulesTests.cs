@@ -10,6 +10,7 @@ public class MatchRulesTests
   ""ticksPerSecond"": 20,
   ""matchLengthSeconds"": 180,
   ""suddenDeathSeconds"": 60,
+  ""suddenDeathIncomeMultiplier"": 2,
   ""goldBaseIncomePerSecond"": 0.35,
   ""goldStartingAmount"": 5,
   ""goldCap"": 10,
@@ -18,7 +19,10 @@ public class MatchRulesTests
   ""deckSize"": 8,
   ""unitSeparationDistance"": 0.6,
   ""unitSeparationPushPerSecond"": 1.5,
-  ""unitSpawnSpacing"": 0.5
+  ""unitStoppedPushFactor"": 0.3,
+  ""unitSpawnSpacing"": 0.5,
+  ""aggroRadius"": 5.5,
+  ""meleeTargetCrowdPenalty"": 1
 }".Replace("\r\n", "\n");
 
     internal static string ContentPath(string fileName) =>
@@ -51,8 +55,12 @@ public class MatchRulesTests
         Assert.Equal(new[]
         {
             "goldBaseIncomePerSecond", "goldStartingAmount",
-            "unitSeparationDistance", "unitSeparationPushPerSecond", "unitSpawnSpacing",
+            "unitSeparationDistance", "unitSeparationPushPerSecond", "unitStoppedPushFactor", "unitSpawnSpacing",
+            "aggroRadius", "meleeTargetCrowdPenalty",
         }, rules.TuningPlaceholders);
+        Assert.Equal(Fix.FromInt(2), rules.SuddenDeathIncomeMultiplier);
+        Assert.True(rules.UnitStoppedPushFactor > Fix.Zero && rules.UnitStoppedPushFactor < Fix.One);
+        Assert.True(rules.AggroRadius > Fix.Zero);
         Assert.True(rules.UnitSeparationDistance > Fix.Zero);
     }
 
@@ -71,8 +79,8 @@ public class MatchRulesTests
         string json = ValidJson.Replace("\"handSize\": 4,", "\"handSize\": 4,\n  \"handsize\": 4,");
         var ex = Assert.Throws<SimJsonException>(() => MatchRules.FromJson(json));
         Assert.Contains("unknown key \"handsize\"", ex.Message);
-        Assert.Equal(10, ex.Line);
-        Assert.StartsWith("rules.json (line 10,", ex.Message);
+        Assert.Equal(11, ex.Line);
+        Assert.StartsWith("rules.json (line 11,", ex.Message);
     }
 
     [Theory]
@@ -88,6 +96,10 @@ public class MatchRulesTests
     [InlineData("unitSeparationDistance")]
     [InlineData("unitSeparationPushPerSecond")]
     [InlineData("unitSpawnSpacing")]
+    [InlineData("suddenDeathIncomeMultiplier")]
+    [InlineData("unitStoppedPushFactor")]
+    [InlineData("aggroRadius")]
+    [InlineData("meleeTargetCrowdPenalty")]
     public void MissingKey_IsRejected(string key)
     {
         string json = string.Join("\n", ValidJson.Split('\n').Where(line => !line.Contains("\"" + key + "\"")));
@@ -115,6 +127,12 @@ public class MatchRulesTests
     [InlineData("\"unitSeparationDistance\": 0.6", "\"unitSeparationDistance\": 0", "at least")]
     [InlineData("\"unitSeparationPushPerSecond\": 1.5", "\"unitSeparationPushPerSecond\": -1", "at least")]
     [InlineData("\"unitSpawnSpacing\": 0.5", "\"unitSpawnSpacing\": 65", "at most 64")]
+    [InlineData("\"unitStoppedPushFactor\": 0.3", "\"unitStoppedPushFactor\": 1.5", "at most 1")]
+    [InlineData("\"unitStoppedPushFactor\": 0.3", "\"unitStoppedPushFactor\": -0.1", "at least")]
+    [InlineData("\"aggroRadius\": 5.5", "\"aggroRadius\": -1", "at least")]
+    [InlineData("\"aggroRadius\": 5.5", "\"aggroRadius\": 100", "at most 64")]
+    [InlineData("\"meleeTargetCrowdPenalty\": 1", "\"meleeTargetCrowdPenalty\": -1", "at least")]
+    [InlineData("\"suddenDeathIncomeMultiplier\": 2", "\"suddenDeathIncomeMultiplier\": 30", "must not exceed goldCap")]
     public void InvalidValues_AreRejected(string original, string replacement, string fragment)
     {
         Assert.Contains(original, ValidJson);

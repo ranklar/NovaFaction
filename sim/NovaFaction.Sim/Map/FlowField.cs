@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using NovaFaction.Sim.Numerics;
 
 namespace NovaFaction.Sim.Map
@@ -362,12 +363,15 @@ namespace NovaFaction.Sim.Map
     }
 
     /// <summary>
-    /// One flow field per structure of a grid, built on first use and rebuilt after walkability changes.
+    /// One flow field per structure of a grid, plus one per single target cell (used to chase enemy units),
+    /// each built on first use and rebuilt after walkability changes. Fields are derived data: which ones
+    /// happen to be cached never changes a result.
     /// </summary>
     public sealed class FlowFieldCache
     {
         private readonly Grid _grid;
         private readonly FlowField?[] _fields;
+        private readonly Dictionary<int, FlowField> _cellFields = new Dictionary<int, FlowField>(); // lookup only
 
         public FlowFieldCache(Grid grid)
         {
@@ -390,6 +394,23 @@ namespace NovaFaction.Sim.Map
             {
                 field = FlowField.Compute(_grid, _grid.GetFootprint(structureIndex));
                 _fields[structureIndex] = field;
+                BuildCount++;
+            }
+            return field;
+        }
+
+        /// <summary>The field leading to one in-bounds cell (which counts as open even if it is blocked).</summary>
+        public FlowField GetForCell(CellCoord cell)
+        {
+            if (!_grid.IsInBounds(cell))
+            {
+                throw new ArgumentOutOfRangeException(nameof(cell));
+            }
+            int key = _grid.ToIndex(cell.X, cell.Y);
+            if (!_cellFields.TryGetValue(key, out FlowField? field) || field.IsStale)
+            {
+                field = FlowField.Compute(_grid, new CellRect(cell.X, cell.Y, 1, 1));
+                _cellFields[key] = field;
                 BuildCount++;
             }
             return field;

@@ -1,4 +1,5 @@
 using NovaFaction.Sim.Cards;
+using NovaFaction.Sim.Combat;
 using NovaFaction.Sim.Commands;
 using NovaFaction.Sim.Content;
 using NovaFaction.Sim.Map;
@@ -49,8 +50,9 @@ public class SimulationTests
         Assert.Throws<ArgumentOutOfRangeException>(() => s.GetPlayer(2));
         Assert.Throws<ArgumentNullException>(() => new Simulation(null!, 1));
         Deck deck = TestSim.DefaultDeck(rules);
-        Assert.Throws<ArgumentNullException>(() => new MatchSetup(null!, Map, deck, deck));
-        Assert.Throws<ArgumentNullException>(() => new MatchSetup(rules, null!, deck, deck));
+        Assert.Throws<ArgumentNullException>(() => new MatchSetup(null!, Map, TestSim.LoadStructures(), deck, deck));
+        Assert.Throws<ArgumentNullException>(() => new MatchSetup(rules, null!, TestSim.LoadStructures(), deck, deck));
+        Assert.Throws<ArgumentNullException>(() => new MatchSetup(rules, Map, null!, deck, deck));
     }
 
     [Fact]
@@ -154,7 +156,7 @@ public class SimulationTests
     }
 
     [Fact]
-    public void Clock_ReachesZeroAndMatchEnds()
+    public void Clock_WithNoDamage_GoesToSuddenDeathThenTieBreak()
     {
         MatchRules rules = Rules;
         var sim = TestSim.New(rules, Map, 7);
@@ -165,12 +167,25 @@ public class SimulationTests
         }
         Assert.Equal(1, sim.State.ClockRemainingTicks);
 
+        // 0 - 0 at the clock: sudden death with a fresh clock.
+        sim.Tick(NoCommands);
+        Assert.Equal(MatchPhase.SuddenDeath, sim.State.Phase);
+        Assert.Equal(rules.SuddenDeathTicks, sim.State.ClockRemainingTicks);
+        Assert.Equal(MatchState.NoWinner, sim.State.Winner);
+        Assert.Equal(EndReason.None, sim.State.EndReason);
+        Assert.Equal(180 * 20, sim.State.Tick);
+
+        TestSim.Run(sim, rules.SuddenDeathTicks - 1);
+        Assert.Equal(MatchPhase.SuddenDeath, sim.State.Phase);
         sim.Tick(NoCommands);
         Assert.Equal(0, sim.State.ClockRemainingTicks);
-        Assert.Equal(MatchPhase.Ended, sim.State.Phase);
         Assert.True(sim.IsEnded);
-        Assert.Equal(180 * 20, sim.State.Tick);
-        Assert.Equal(3600, sim.Log.TickCount);
+        Assert.Equal((180 + 60) * 20, sim.State.Tick);
+        Assert.Equal(4800, sim.Log.TickCount);
+        // Nothing was damaged and nobody collected gold, so only the coin flip is left.
+        Assert.Equal(EndReason.TieBreak, sim.State.EndReason);
+        Assert.Equal(TieBreakRule.CoinFlip, sim.State.TieBreakRule);
+        Assert.InRange(sim.State.Winner, 0, 1);
     }
 
     [Fact]
@@ -254,9 +269,9 @@ public class SimulationTests
 
     /// <summary>Plays a whole match, feeding the log's commands where it has them and nothing after.</summary>
     internal static Simulation RunFullMatch(MatchRules rules, ulong seed, CommandLog log, List<ulong>? hashes = null,
-        MapDefinition? map = null)
+        MapDefinition? map = null, StructureCatalog? structures = null)
     {
-        var sim = TestSim.New(rules, map ?? Map, seed);
+        var sim = TestSim.New(rules, map ?? Map, seed, structures);
         hashes?.Add(sim.ComputeHash());
         while (!sim.IsEnded)
         {

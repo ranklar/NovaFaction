@@ -8,17 +8,18 @@ using NovaFaction.Sim.Numerics;
 namespace NovaFaction.Sim
 {
     /// <summary>
-    /// Everything fixed before a match starts, apart from the seed: rules, map and both decks.
+    /// Everything fixed before a match starts, apart from the seed: rules, map, structure stats and both decks.
     /// Each deck carries its own faction roster, so the two players may use different factions.
     /// </summary>
     public sealed class MatchSetup
     {
         private readonly Deck[] _decks;
 
-        public MatchSetup(MatchRules rules, MapDefinition map, Deck deck0, Deck deck1)
+        public MatchSetup(MatchRules rules, MapDefinition map, StructureCatalog structures, Deck deck0, Deck deck1)
         {
             Rules = rules ?? throw new ArgumentNullException(nameof(rules));
             Map = map ?? throw new ArgumentNullException(nameof(map));
+            Structures = structures ?? throw new ArgumentNullException(nameof(structures));
             _decks = new[]
             {
                 deck0 ?? throw new ArgumentNullException(nameof(deck0)),
@@ -38,6 +39,9 @@ namespace NovaFaction.Sim
 
         public MapDefinition Map { get; }
 
+        /// <summary>Keep and forward tower stats (content/structures.json).</summary>
+        public StructureCatalog Structures { get; }
+
         /// <summary>Deck of player 0 and player 1.</summary>
         public IReadOnlyList<Deck> Decks => _decks;
 
@@ -50,12 +54,16 @@ namespace NovaFaction.Sim
         private void CheckSpeeds(Deck deck)
         {
             Fix limit = Map.CellSize * Fix.Half * Fix.FromInt(Rules.TicksPerSecond);
+            // Moving neighbors push up to the base strength; stopped neighbors add up to (stopped factor) backward
+            // plus a full-strength sideways slide. (2 + factor) times the base bounds the total.
+            Fix maxPush = Rules.UnitSeparationPushPerSecond * (Fix.FromInt(2) + Rules.UnitStoppedPushFactor);
             foreach (UnitDefinition card in deck.Cards)
             {
-                if (card.MoveSpeed + Rules.UnitSeparationPushPerSecond > limit)
+                if (card.MoveSpeed + maxPush > limit)
                 {
                     throw new ArgumentException("Unit \"" + card.Id + "\" moves too fast for this map and tick rate: "
-                        + "moveSpeed + unitSeparationPushPerSecond must be at most " + limit + " world units per second.");
+                        + "moveSpeed + unitSeparationPushPerSecond * (2 + unitStoppedPushFactor) must be at most "
+                        + limit + " world units per second.");
                 }
             }
         }

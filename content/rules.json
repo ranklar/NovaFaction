@@ -2,6 +2,7 @@
   "ticksPerSecond": 20,
   "matchLengthSeconds": 180,
   "suddenDeathSeconds": 60,
+  "suddenDeathIncomeMultiplier": 2,
   "goldBaseIncomePerSecond": 0.35,
   "goldStartingAmount": 5,
   "goldCap": 10,
@@ -10,12 +11,18 @@
   "deckSize": 8,
   "unitSeparationDistance": 0.6,
   "unitSeparationPushPerSecond": 1.5,
+  "unitStoppedPushFactor": 0.3,
   "unitSpawnSpacing": 0.5,
+  "aggroRadius": 5.5,
+  "meleeTargetCrowdPenalty": 1,
   "tuningPlaceholders": [
     "goldBaseIncomePerSecond",
     "goldStartingAmount",
     "unitSeparationDistance",
     "unitSeparationPushPerSecond",
-    "unitSpawnSpacing"
+    "unitStoppedPushFactor",
+    "unitSpawnSpacing",
+    "aggroRadius",
+    "meleeTargetCrowdPenalty"
   ]
 }

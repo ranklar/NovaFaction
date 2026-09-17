@@ -9,8 +9,8 @@ Themed factions released over time as content packs; fantasy faction first.
 - 1v1, human or bot. 3:00 clock.
 - Win: enemy Keep destroyed = instant win. Otherwise higher damage score at the clock.
   Exact tie -> sudden death. No draws.
-- Sudden death (decided Sept 2026, not implemented yet): lasts 60s; gold income is doubled
-  (the multiplier will be a rules.json value); the first player to deal any damage wins.
+- Sudden death (decided Sept 2026, implemented Sept 2026): lasts 60s; gold income is doubled
+  (rules.json suddenDeathIncomeMultiplier); the first player to deal any structure damage wins.
   If it expires with no damage dealt, tie-breaks apply in this order:
   1. more enemy structures destroyed;
   2. higher HP on your own weakest structure (a destroyed structure counts as 0 HP);
@@ -99,11 +99,15 @@ Themed factions released over time as content packs; fantasy faction first.
     for state hashes and replays. NextInt is unbiased (rejection sampling). Chance always consumes
     exactly one draw. Changing the algorithm breaks saved replays; a test pins reference output.
 - Sim match loop (sim/NovaFaction.Sim):
-  - content/rules.json holds match-wide rules (tick rate, clock, sudden death, gold income/start/cap,
-    spawn delay, hand and deck size, unit separation and spawn spacing). Every key is required;
-    unknown keys are errors. JSON has no comments, so values that are still guesses are listed by
-    name in "tuningPlaceholders". Current placeholders: base income 0.35 gold/s (about Clash Royale's
-    pace), 5 starting gold, and the three unit movement values (see "Units, decks and movement").
+  - content/rules.json holds match-wide rules (tick rate, clock, sudden death length and income
+    multiplier, gold income/start/cap, spawn delay, hand and deck size, unit separation, stopped push
+    and spawn spacing, aggro radius, melee crowd penalty). Every key is required; unknown keys are
+    errors. JSON has no comments, so values that are still guesses are listed by name in
+    "tuningPlaceholders". Current placeholders: base income 0.35 gold/s (about Clash Royale's pace),
+    5 starting gold, the four unit movement values (see "Units, decks and movement") and the two
+    targeting values (see "Combat and match resolution").
+    suddenDeathIncomeMultiplier (2) is design data, not a placeholder; base income times it must not
+    exceed the gold cap. unitStoppedPushFactor must be 0..1.
     The spawn delay must be a whole number of ticks. handSize must be less than deckSize.
   - SimJson: strict RFC 8259 reader, no dependencies. Numbers stay as text until read as int/long or
     Fix (exponents are valid JSON but rejected as Fix). Errors carry file name, line and column.
@@ -116,23 +120,31 @@ Themed factions released over time as content packs; fantasy faction first.
     (empty hand slot, not enough gold, target not deployable) are deterministic no-ops that only
     increase the player's IgnoredDeploys counter, which is in the state hash.
   - Simulation.Tick(commands) order: validate, record in the CommandLog, apply commands in
-    canonical order, create units of zero-delay deploys, move units, accrue income, advance tick and
-    clock, create units whose spawn delay is over, handle clock expiry.
+    canonical order, create units of zero-delay deploys, combat and movement (see "Combat and match
+    resolution"), resolve Keep kills and sudden-death damage, accrue income (multiplied in sudden
+    death), advance tick and clock; then, unless the match just ended, create units whose spawn delay
+    is over and handle clock expiry.
     Tick N's commands must be stamped N (State.Tick before the call). A 3:00 match is 3600 ticks.
-  - A match is built from a MatchSetup (rules, map, player 0's deck, player 1's deck) plus the seed:
+  - A match is built from a MatchSetup (rules, map, structure stats, player 0's deck, player 1's deck)
+    plus the seed:
     new Simulation(setup, seed); Simulation.Replay(setup, seed, log). Each deck carries its own
     faction roster, so the two players may later bring different factions.
   - Income is exact: each tick adds income/ticksPerSecond with the sub-raw remainder carried per
     player, so a player gains exactly the per-second income every whole second. At the cap the
     carry is discarded (a capped player banks nothing).
-  - Clock expiry: Regulation -> Ended for now. Scoring, sudden death and Keep kills are TODO.
+  - Clock expiry: see "Combat and match resolution".
   - State hash: 64-bit FNV-1a over little-endian bytes, starting with a hash format version.
-    Covers tick, RNG state, clock, phase, and per player: gold raw, income carry, score, command
-    count, ignored deploys, the deck's unit-data content hash, hand slots and draw queue. Then the
-    map, the next unit id, every unit (id order: id, owner, card id, position, hp, state, objective)
-    and every pending spawn (deploy order). Hash format version is 3.
+    Covers tick, RNG state, clock, phase, winner, end reason, tie-break rule, and per player: gold
+    raw, income carry, score, gold collected, command count, ignored deploys, the deck's unit-data
+    content hash, hand slots and draw queue. Then the map, the structures file's content hash, every
+    structure's combat state (index order: index, hp, attack cooldown, target unit id), the next unit
+    id, every unit (id order: id, owner, card id, position, hp, state, objective, target kind and id,
+    attack cooldown), every pending spawn (deploy order), the next projectile id and every projectile
+    (id order: id, owner, position, target, aim point, speed per tick, damage, splash radius, target
+    layer). Hash format version is 4.
     New state implements IStateHashable and appends count-then-items in id order.
-    A test pins the hash of a scripted full match; change it only on purpose.
+    A test pins the hash of a scripted full match on the small test map with fixed inline rules and
+    structure stats (it includes kills, projectiles and a Keep kill); change it only on purpose.
   - Replay = rules + seed + CommandLog (Simulation.Replay). The log is in memory only for now.
   - Replay file format (decided Sept 2026, not implemented yet): compact, versioned binary.
     Header: replay format version, sim version, content version, rules version, seed, map id (plus
@@ -188,14 +200,18 @@ Themed factions released over time as content packs; fantasy faction first.
   - Unit files: content/factions/<faction>/units.json with formatVersion (1), faction (id), units.
     Each unit: id (a-z 0-9 _ -, unique in the file), displayName, slot (tank, bruiser, swarm, ranged,
     flyer, siege, support, spell, building, leader), cost (whole number 1-7), hp (> 0), damage (>= 0),
-    attackIntervalSeconds (> 0), range (> 0), moveSpeed (>= 0), targets (ground, air, both), isFlying,
-    spawnCount (1-25), isLeader (must be true exactly when slot is leader). Optional
-    "placeholder": true marks numbers that are guesses. Unknown keys are errors. The file's content
+    attackIntervalSeconds (> 0), range (> 0), moveSpeed (>= 0), targets (ground, air, both),
+    targetPriority (any = enemy units and structures, structuresOnly), isFlying, spawnCount (1-25),
+    isLeader (must be true exactly when slot is leader). Optional: projectileSpeed (> 0; present =
+    ranged, absent = melee), splashRadius (> 0; absent = single target), "placeholder": true marks
+    numbers that are guesses. Unknown keys are errors. The file's content
     hash (from parsed data) is part of the state hash.
   - content/factions/fantasy/units.json: 8 placeholder units, one per requested job: stone_golem
     (tank), knight (bruiser), goblin_pack (swarm of 4), elf_archer (ranged), griffin (flyer),
     catapult (siege), fire_spirit (spell stand-in, a fast 1 HP unit until real spells exist) and
-    warlord (leader). Every number is a placeholder.
+    warlord (leader). Every number is a placeholder. Ranged: elf_archer (projectile 10/s) and catapult
+    (6/s). Splash: catapult (1.25) and fire_spirit (1.5, melee). Structures only: stone_golem and
+    catapult.
   - Range is measured from the unit's center to the nearest point of the target's footprint, so
     melee units use a small positive range (0.5).
   - Deck: exactly deckSize (8) different card ids from one roster, exactly one of them a leader
@@ -218,30 +234,112 @@ Themed factions released over time as content packs; fantasy faction first.
     back, then the diagonals, then the next ring. Rotated 180 degrees for player 1 so both players'
     formations face the enemy the same way. A position on a blocked cell moves to the nearest
     walkable cell center within 3 cells (ties: lower row, then left), else to the deploy target.
-  - Units: id (from 1, never reused), owner, card, position, hp (max, untouched until combat), state
-    (Spawning, Moving, Holding) and objective (structure index or none). Stored in id order.
-    The client reads MatchState.Units, PendingSpawns and each player's Cards (Hand, NextCard, Queue);
-    only the sim can change them.
-  - Movement runs in two passes so update order cannot matter: every unit decides state, objective
-    and velocity from the positions at the start of the tick, then moving units step.
-    - Spawning units become Moving on their first tick. Holding units stay put until their objective
-      is destroyed, then become Moving and pick a new one the same tick.
-    - Moving units re-pick their objective every tick: the nearest standing enemy structure by
-      flow-field path distance (ground) or by straight-line distance to the footprint (flyers).
-      Ties go to the lower structure index. No structure left: Holding with no objective.
-    - Within range of the objective (before or after the step): Holding.
+  - Units: id (from 1, never reused), owner, card, position, hp, state (Spawning, Moving, Holding,
+    Attacking), objective (structure index or none), target (enemy unit id, structure index or none)
+    and attack cooldown. Stored in id order. Holding now means "nothing it can attack" (e.g. no enemy
+    structure left); a unit in range of its target is Attacking.
+    The client reads MatchState.Units, Structures, Projectiles, PendingSpawns, Winner/EndReason and
+    each player's Cards (Hand, NextCard, Queue); only the sim can change them.
+  - Movement runs in two passes so update order cannot matter: every unit decides state, target,
+    objective and velocity from the positions at the start of the tick, then moving units step
+    (targeting details in "Combat and match resolution").
+    - Spawning units act (and may attack) on their first tick.
+    - A unit that is not locked onto a target re-picks its objective every tick: the nearest standing
+      enemy structure by flow-field path distance (ground) or by straight-line distance to the
+      footprint (flyers). Ties go to the lower structure index. No structure left: Holding with no
+      objective. When any structure is destroyed, every unit re-picks its objective that same tick.
+    - Within range of the target (before or after the step): Attacking. An arriving unit stops on the
+      tick it arrives and attacks from the next one.
     - Ground direction: bilinear blend of the flow directions of the 4 cells around the unit,
       leaving out blocked cells and cells whose path cost differs from the unit's own cell by more
       than 2 (the other side of a wall); falls back to the unit's own cell direction.
+    - Chasing an enemy unit (ground): the flow field toward the target's cell (built on demand, cached
+      per cell until walkability changes), blended the same way; straight at the target once it is in
+      the same or a neighboring cell. Flyers fly straight at the target.
     - Flyers fly straight at the footprint center, ignore terrain and are kept inside the map.
-    - Separation: each friendly unit of the same layer (ground or air) closer than
+    - Separation (soft collision): each friendly unit of the same layer (ground or air) closer than
       unitSeparationDistance (0.6) pushes by (distance short / separation distance) along the line
-      between them; the sum is capped at 1 and scaled by unitSeparationPushPerSecond (1.5). Two units
-      on exactly the same point split along X, lower id to the left. Enemies do not push yet.
+      between them. Pushes from moving neighbors and from stopped (Attacking or Holding at tick
+      start) neighbors are summed separately, each capped at 1. The stopped sum is scaled by
+      unitStoppedPushFactor (0.3, placeholder), so it is always slower than any unit and cannot hold
+      a unit short of its target; moving units may therefore overlap stopped friends a little.
+      The stopped sum also adds a sideways slide of the same size as the (unweakened) sum,
+      perpendicular to the unit's heading, toward the side it is already offset to (left when exactly
+      head-on; left stays left under the map's 180-degree rotation, so both players behave alike).
+      Being sideways, the slide never slows the unit. The total is scaled by
+      unitSeparationPushPerSecond (1.5). Two units on exactly the same point split along X, lower id
+      to the left. Stopped units are never pushed. Enemies do not push each other.
     - Speed: velocity = direction * moveSpeed + push, divided by the tick rate per step.
     - Ground step: take the full step if it lands on a walkable cell without cutting a blocked
       corner; otherwise the pure flow step (always open); otherwise stay. MatchSetup rejects content
-      where moveSpeed + push would exceed half a cell per tick, which keeps these checks sound.
+      where moveSpeed + push * (2 + unitStoppedPushFactor) would exceed half a cell per tick, which keeps
+      these checks sound.
+- Combat and match resolution (sim/NovaFaction.Sim/Combat):
+  - content/structures.json: formatVersion (1) and one entry per kind, "keep" and "tower" (the map file
+    names): hp, damage, attackIntervalSeconds, range, targets, projectileSpeed, destructionBonus, optional
+    "placeholder". All current numbers are placeholders: Keep 4000 HP, 90 damage every 1 s, range 6,
+    bonus 1000; tower 2500 HP, 80 damage every 0.8 s, range 7, bonus 500; both target both layers and
+    shoot at 10 units/s. The Keep attacks from the start (no Clash Royale style activation yet).
+    Its content hash is part of the state hash.
+  - Structures track HP (MatchState.Structures). At 0 HP a structure is destroyed: footprint walkable,
+    flow fields rebuild, a tower's unlock zone goes to the attacker, every unit re-picks its objective.
+  - Who can hit what: Ground attackers hit ground units and structures; Air attackers hit only flyers
+    (and never structures); Both hits everything. Flyers are untouchable by Ground-only attackers.
+  - Unit targeting, each tick, from start-of-tick state:
+    - A unit keeps an enemy unit as its target while it lives, can be hit, and stays within the scan
+      radius; a ground attacker also drops it when it is out of range and standing somewhere the
+      attacker cannot walk to (e.g. over the river). A structure target is kept only while it stands
+      and is in range (locked while attacking); otherwise the unit looks again every tick.
+    - Scan radius = max(aggroRadius, the unit's range); aggroRadius is 5.5 (placeholder), so a unit
+      never ignores an enemy it could already hit.
+    - Scan: the nearest enemy it may attack within the radius, by straight-line distance (to the unit's
+      center, or to the nearest point of a footprint). targetPriority any: enemy units and standing
+      enemy structures; structuresOnly: structures only. Ties: units before structures, then lower id
+      or index. No hit: the objective structure (see movement). An Air-only unit with no target still
+      walks to its objective and Holds there.
+    - Spreading melee: a melee unit scores an enemy unit as distance + meleeTargetCrowdPenalty (1,
+      placeholder) per friendly unit already targeting it. Units decide in id order and each pick or
+      drop updates the count at once, so friends deciding later in the same tick see it. Counts are
+      per player, so the order never favors either player.
+  - Range: unit to unit is center to center; unit to structure and structure to unit is to the nearest
+    point of the footprint.
+  - Attacks: attack cooldowns count down every tick in every state; a unit or structure whose target is
+    in range attacks when its cooldown is 0, then waits attackIntervalSeconds (rounded to the nearest
+    whole tick, at least 1). A fresh unit already in range attacks on its first tick. Melee damage
+    lands the same tick. Ranged units and all structures fire a Projectile (from the unit's position or
+    the footprint center) that first moves on the next tick, homes on the target at projectileSpeed,
+    and always hits when it gets there (arrival = remaining distance <= one tick's travel). Aim point:
+    the target unit's position (updated each tick while it lives) or the nearest footprint point to
+    where it was fired from. If the target is dead or destroyed, the projectile flies on to the last
+    aim point and fizzles there with no damage. Damage, splash and target layer are copied into the
+    projectile when fired.
+  - Structures shoot the nearest enemy unit in range they can hit (distance from the footprint, ties
+    to the lower id) and keep that target while it stays in range.
+  - Splash (optional splashRadius): damages every enemy unit the attacker could hit whose center is
+    within the radius of the impact point, and every enemy structure whose footprint is. Priority does
+    not matter for splash (a structuresOnly catapult's splash still hurts units). No friendly fire.
+  - Tick order inside combat: cooldowns; unit decisions; structure decisions; projectiles in flight
+    move and arrive; units then structures attack; all hits apply in that order (projectile id, unit
+    id, structure index); moving units that are still alive step; units at 0 HP are removed; targets
+    pointing at removed units or destroyed structures are cleared. All hits in a tick are
+    simultaneous: a unit killed this tick still gets its attack.
+  - Score: HP actually removed from enemy structures (a hit is capped by the HP left) plus the
+    structure's destructionBonus when it falls. Killing units scores nothing.
+  - Resolution (MatchState.Winner 0/1 or -1, EndReason, TieBreakRule):
+    - A Keep destroyed: Ended at once, the attacker wins (KeepDestroyed), whatever the score. If both
+      Keeps fall on the same tick: the higher score wins (Score), else the tie-break list.
+    - Regulation clock at zero: higher score wins (Score). Equal: SuddenDeath with a fresh
+      suddenDeathSeconds clock and income times suddenDeathIncomeMultiplier (a 0 s sudden death goes
+      straight to the tie-break list).
+    - Sudden death: the first tick with any structure HP removed ends the match (FirstDamage). If both
+      players removed structure HP that tick, the one who removed more wins; exactly equal goes to the
+      tie-break list. Unit-on-unit damage does not count.
+    - Sudden death clock at zero: the tie-break list (TieBreak, TieBreakRule says which rule decided):
+      1. more enemy structures destroyed; 2. higher HP on your own weakest structure, where a destroyed
+      structure counts as 0 HP (as decided above; so if both players lost a structure this rule is
+      level); 3. more gold collected from mines and chests (PlayerState.GoldCollected, always 0 until
+      mines and chests exist); 4. a coin flip: SimRandom.NextInt(0, 2) from the match RNG, the only
+      draw combat makes.
 - server/: ASP.NET Core (C#). Accounts, economy, matchmaking, input relay, match verification by
   re-running the sim. PostgreSQL. Runs on the Windows desktop for LAN testing; cloud container later.
 - content/: JSON data for units, factions, maps, missions. Art in Addressables bundles per theme.
@@ -263,10 +361,16 @@ Themed factions released over time as content packs; fantasy faction first.
 - Income, cost and match-length numbers (tune in the headless harness).
 - Replay implementation (header decided above): add a rules version field to rules.json.
 - Unit levels: where they come from and how they scale stats (~5-7% per level) in the sim.
-- Structure HP and damage score live with combat (next); the map layer only tracks destroyed/standing.
-- Crowding at a structure: melee units that arrive behind friends already Holding at the same
-  structure are pushed back by them and can stall a few tenths short of range, staying Moving
-  without advancing (seen in a busy scripted 3-minute match). Decide with combat: e.g. weaker push
-  from Holding units (soft collision) or re-targeting to nearby enemy units.
-- Enemy units do not block or push each other yet (combat session).
-- Real spells: fire_spirit stands in for the spell slot as a unit.
+- Enemy units do not block or push each other (decided to leave as is with combat; revisit if fights
+  look wrong on the phone).
+- Real spells: fire_spirit stands in for the spell slot as a unit (it keeps attacking; it does not
+  die on its first hit as a Clash Royale fire spirit would).
+- Keep activation: the Keep shoots from the start. Clash Royale only wakes the king tower once it is
+  hit or a tower falls; decide when tuning.
+- Combat numbers (structure HP/damage/range, aggro radius, stopped push, crowd penalty) are
+  placeholders; with the shipped numbers towers win most fights against a trickle of units. Tune in
+  the headless harness.
+- Tie-break rule 2 wording: the Sept 2026 combat request said "weakest standing structure"; the design
+  decision above (a destroyed structure counts as 0 HP) was kept. Confirm.
+- Crowding at structures (fixed Sept 2026 with the weak stopped push and sideways slide): a busy
+  scripted battle test requires that every living unit is Attacking or Holding at the end.

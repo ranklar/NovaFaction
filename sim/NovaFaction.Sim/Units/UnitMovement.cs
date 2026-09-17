@@ -7,86 +7,14 @@ using NovaFaction.Sim.Numerics;
 namespace NovaFaction.Sim.Units
 {
     /// <summary>
-    /// Per-tick unit movement. See docs/design.md ("Units, decks and movement") for the rules.
-    /// Work happens in two passes so the result does not depend on update order: first every unit
-    /// decides its state, objective and velocity from the positions at the start of the tick, then
-    /// every moving unit steps.
+    /// Movement helpers: objectives, footprint distances, flow directions, separation, stepping and spawn
+    /// placement. The per-tick loop that uses them is <see cref="Combat.BattleSystem"/>. See docs/design.md
+    /// ("Units, decks and movement" and "Combat and match resolution") for the rules.
     /// </summary>
     internal static class UnitMovement
     {
         /// <summary>Neighbor flow cells whose path cost differs from the unit's own cell by more than this are not blended.</summary>
         private static readonly Fix MaxBlendCostGap = Fix.FromInt(2);
-
-        internal static void Tick(MatchState state, MatchRules rules)
-        {
-            List<Unit> units = state.UnitList;
-            int n = units.Count;
-            if (n == 0)
-            {
-                return;
-            }
-            MapState map = state.Map;
-            var start = new FixVector2[n];
-            for (int i = 0; i < n; i++)
-            {
-                start[i] = units[i].Position;
-            }
-
-            var velocity = new FixVector2[n];
-            var moving = new bool[n];
-            for (int i = 0; i < n; i++)
-            {
-                Unit u = units[i];
-                if (u.State == UnitState.Spawning)
-                {
-                    u.State = UnitState.Moving;
-                }
-                if (u.State == UnitState.Holding)
-                {
-                    if (u.Objective != Unit.NoObjective && !map.IsDestroyed(u.Objective))
-                    {
-                        continue; // anchored until its objective falls
-                    }
-                    u.State = UnitState.Moving;
-                }
-
-                u.Objective = SelectObjective(map, u, start[i]);
-                if (u.Objective == Unit.NoObjective || IsInRange(map.Grid, u, start[i], u.Objective))
-                {
-                    u.State = UnitState.Holding;
-                    continue;
-                }
-                FixVector2 direction = u.IsFlying
-                    ? StraightDirection(map.Grid, start[i], u.Objective)
-                    : BlendedFlowDirection(map, u.Objective, start[i]);
-                velocity[i] = direction * u.Definition.MoveSpeed + SeparationPush(units, start, i, rules);
-                moving[i] = true;
-            }
-
-            Fix ticksPerSecond = Fix.FromInt(rules.TicksPerSecond);
-            for (int i = 0; i < n; i++)
-            {
-                if (!moving[i])
-                {
-                    continue;
-                }
-                Unit u = units[i];
-                FixVector2 step = PerTick(velocity[i], ticksPerSecond);
-                if (u.IsFlying)
-                {
-                    u.Position = ClampToMap(map.Grid, start[i] + step);
-                }
-                else
-                {
-                    FixVector2 flowOnly = map.FlowFields.Get(u.Objective).GetDirection(start[i]) * u.Definition.MoveSpeed;
-                    u.Position = GroundStep(map.Grid, start[i], step, PerTick(flowOnly, ticksPerSecond));
-                }
-                if (IsInRange(map.Grid, u, u.Position, u.Objective))
-                {
-                    u.State = UnitState.Holding;
-                }
-            }
-        }
 
         // ------------------------------------------------------------ objectives
 
@@ -133,17 +61,28 @@ namespace NovaFaction.Sim.Units
         private static Fix AxisGap(Fix value, Fix min, Fix max) =>
             value < min ? min - value : value > max ? value - max : Fix.Zero;
 
-        // ------------------------------------------------------------ directions
-
-        private static FixVector2 StraightDirection(Grid grid, FixVector2 position, int structure)
+        /// <summary>The point of a structure's footprint nearest to the position (the position itself if inside).</summary>
+        internal static FixVector2 ClosestPointOnFootprint(Grid grid, FixVector2 position, int structure)
         {
             CellRect rect = grid.GetFootprint(structure);
             Fix cs = grid.CellSize;
-            var center = new FixVector2(
+            return new FixVector2(
+                Fix.Clamp(position.X, Fix.FromInt(rect.X) * cs, Fix.FromInt(rect.XEnd) * cs),
+                Fix.Clamp(position.Y, Fix.FromInt(rect.Y) * cs, Fix.FromInt(rect.YEnd) * cs));
+        }
+
+        /// <summary>World position of the center of a structure's footprint.</summary>
+        internal static FixVector2 FootprintCenter(Grid grid, int structure)
+        {
+            CellRect rect = grid.GetFootprint(structure);
+            Fix cs = grid.CellSize;
+            return new FixVector2(
                 Fix.FromInt(rect.X + rect.XEnd) * cs * Fix.Half,
                 Fix.FromInt(rect.Y + rect.YEnd) * cs * Fix.Half);
-            return (center - position).Normalized;
         }
+
+        // ------------------------------------------------------------ directions
+
 
         /// <summary>
         /// Bilinear blend of the flow directions of the four cells whose centers surround the position,
@@ -151,10 +90,11 @@ namespace NovaFaction.Sim.Units
         /// cells whose path cost is far from the unit's own (the other side of a wall) are left out.
         /// Falls back to the unit's own cell direction if the blend cancels out.
         /// </summary>
-        internal static FixVector2 BlendedFlowDirection(MapState map, int structure, FixVector2 position)
+        internal static FixVector2 BlendedFlowDirection(MapState map, int structure, FixVector2 position) =>
+            BlendedFlowDirection(map.Grid, map.FlowFields.Get(structure), position);
+
+        internal static FixVector2 BlendedFlowDirection(Grid grid, FlowField field, FixVector2 position)
         {
-            Grid grid = map.Grid;
-            FlowField field = map.FlowFields.Get(structure);
             CellCoord ownCell = grid.WorldToCell(position);
             FixVector2 own = field.GetCellDirection(ownCell);
             Fix ownCost = field.GetCellDistance(ownCell);
@@ -197,14 +137,22 @@ namespace NovaFaction.Sim.Units
         /// <summary>
         /// Push away from nearby friendly units of the same layer (ground or air), in world units per second.
         /// Each neighbor closer than the separation distance contributes a unit vector away from it scaled by
-        /// how deep the overlap is; the total is capped at full strength. Two units on exactly the same spot
-        /// are split along X by entity id (lower id goes left), so the result never depends on luck.
+        /// how deep the overlap is. Moving neighbors and stopped neighbors (<paramref name="stopped"/>) are
+        /// summed separately, each sum capped at full strength. The stopped sum is weakened by
+        /// unitStoppedPushFactor, so it is slower than any unit and cannot hold one back short of its target
+        /// (the unit may overlap stopped friends a little). It also adds a sideways push of the stopped sum's
+        /// full size, perpendicular to <paramref name="heading"/> and toward the side the unit is already
+        /// offset to (its left when exactly head-on), so an arriving unit slides around friends that are
+        /// already fighting; being sideways, that part never slows the unit down. Two units on exactly the same spot are split along X by entity id
+        /// (lower id goes left), so the result never depends on luck.
         /// </summary>
-        internal static FixVector2 SeparationPush(List<Unit> units, FixVector2[] positions, int index, MatchRules rules)
+        internal static FixVector2 SeparationPush(List<Unit> units, FixVector2[] positions, bool[] stopped, int index,
+            MatchRules rules, FixVector2 heading = default)
         {
             Unit self = units[index];
             Fix range = rules.UnitSeparationDistance;
             FixVector2 push = FixVector2.Zero;
+            FixVector2 stoppedPush = FixVector2.Zero;
             for (int j = 0; j < units.Count; j++)
             {
                 Unit other = units[j];
@@ -225,22 +173,32 @@ namespace NovaFaction.Sim.Units
                 FixVector2 away = distance == Fix.Zero
                     ? (self.Id < other.Id ? -FixVector2.UnitX : FixVector2.UnitX)
                     : delta.Normalized;
-                push += away * ((range - distance) / range);
+                FixVector2 contribution = away * ((range - distance) / range);
+                if (stopped[j])
+                {
+                    stoppedPush += contribution;
+                }
+                else
+                {
+                    push += contribution;
+                }
             }
-            if (push == FixVector2.Zero)
+            stoppedPush = CapAtOne(stoppedPush);
+            FixVector2 slide = FixVector2.Zero;
+            if (stoppedPush != FixVector2.Zero && heading != FixVector2.Zero)
             {
-                return push;
+                var left = new FixVector2(-heading.Y, heading.X);
+                slide = (FixVector2.Dot(stoppedPush, left) >= Fix.Zero ? left : -left) * stoppedPush.Length;
             }
-            if (push.Length > Fix.One)
-            {
-                push = push.Normalized;
-            }
-            return push * rules.UnitSeparationPushPerSecond;
+            return (CapAtOne(push) + stoppedPush * rules.UnitStoppedPushFactor + slide) * rules.UnitSeparationPushPerSecond;
         }
+
+        private static FixVector2 CapAtOne(FixVector2 v) =>
+            v != FixVector2.Zero && v.Length > Fix.One ? v.Normalized : v;
 
         // ------------------------------------------------------------ stepping
 
-        private static FixVector2 PerTick(FixVector2 perSecond, Fix ticksPerSecond) =>
+        internal static FixVector2 PerTick(FixVector2 perSecond, Fix ticksPerSecond) =>
             new FixVector2(perSecond.X / ticksPerSecond, perSecond.Y / ticksPerSecond);
 
         /// <summary>
@@ -278,7 +236,7 @@ namespace NovaFaction.Sim.Units
             return true;
         }
 
-        private static FixVector2 ClampToMap(Grid grid, FixVector2 position)
+        internal static FixVector2 ClampToMap(Grid grid, FixVector2 position)
         {
             Fix maxX = Fix.FromInt(grid.Width) * grid.CellSize - Fix.Epsilon;
             Fix maxY = Fix.FromInt(grid.Height) * grid.CellSize - Fix.Epsilon;

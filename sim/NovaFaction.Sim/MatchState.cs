@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using NovaFaction.Sim.Cards;
+using NovaFaction.Sim.Combat;
 using NovaFaction.Sim.Content;
 using NovaFaction.Sim.Map;
 using NovaFaction.Sim.Numerics;
@@ -12,7 +13,7 @@ namespace NovaFaction.Sim
     {
         /// <summary>The normal 3:00 clock.</summary>
         Regulation = 0,
-        /// <summary>Tie-break period after an exact score tie; first damage wins. Not reached yet.</summary>
+        /// <summary>Tie-break period after an exact score tie: doubled income, first structure damage wins.</summary>
         SuddenDeath = 1,
         /// <summary>The match is over; Tick() may no longer be called.</summary>
         Ended = 2,
@@ -42,8 +43,14 @@ namespace NovaFaction.Sim
         /// </summary>
         public long IncomeRemainder { get; internal set; }
 
-        /// <summary>Damage score. Placeholder: nothing deals damage yet, so it stays zero.</summary>
+        /// <summary>Damage score: HP removed from enemy structures plus the destruction bonus of each one destroyed.</summary>
         public Fix Score { get; internal set; }
+
+        /// <summary>
+        /// Gold picked up from mines and chests (base income does not count); a sudden-death tie-break.
+        /// Always 0 until mines and chests exist.
+        /// </summary>
+        public Fix GoldCollected { get; internal set; }
 
         /// <summary>Number of valid commands this player has submitted.</summary>
         public int CommandsReceived { get; internal set; }
@@ -66,6 +73,7 @@ namespace NovaFaction.Sim
             hasher.Add(Gold);
             hasher.Add(IncomeRemainder);
             hasher.Add(Score);
+            hasher.Add(GoldCollected);
             hasher.Add(CommandsReceived);
             hasher.Add(IgnoredDeploys);
             hasher.Add(Deck.Roster.ContentHash);
@@ -82,11 +90,18 @@ namespace NovaFaction.Sim
         /// <summary>Bump when the hashed layout changes, so old and new hashes never collide by accident.</summary>
         // Version 2 added the map (id, content hash, destroyed structures, unlocked zones).
         // Version 3 added decks/hands, ignored deploys, units and pending spawns.
-        public const int HashFormatVersion = 3;
+        // Version 4 added combat: result fields, gold collected, structure stats and state, unit targets and
+        // cooldowns, and projectiles.
+        public const int HashFormatVersion = 4;
+
+        /// <summary><see cref="Winner"/> value while nobody has won.</summary>
+        public const int NoWinner = -1;
 
         private readonly PlayerState[] _players;
         private readonly List<Unit> _units = new List<Unit>();
         private readonly List<PendingSpawn> _pendingSpawns = new List<PendingSpawn>();
+        private readonly StructureState[] _structures;
+        private readonly List<Projectile> _projectiles = new List<Projectile>();
 
         internal MatchState(ulong seed, MatchSetup setup)
         {
@@ -102,6 +117,14 @@ namespace NovaFaction.Sim
                 new PlayerState(1, rules.GoldStartingAmount, setup.GetDeck(1), rules.HandSize, Random),
             };
             NextUnitId = 1;
+            NextProjectileId = 1;
+            Winner = NoWinner;
+            StructureCatalog = setup.Structures;
+            _structures = new StructureState[setup.Map.Structures.Count];
+            foreach (StructureDefinition s in setup.Map.Structures)
+            {
+                _structures[s.Index] = new StructureState(s, setup.Structures.Get(s.Kind), Map.Grid);
+            }
         }
 
         /// <summary>Number of ticks completed. The next Tick() call executes tick number <see cref="Tick"/>.</summary>
@@ -116,6 +139,28 @@ namespace NovaFaction.Sim
         public int ClockRemainingTicks { get; internal set; }
 
         public MatchPhase Phase { get; internal set; }
+
+        /// <summary>The winning player (0 or 1) once the match has ended, else <see cref="NoWinner"/>.</summary>
+        public int Winner { get; internal set; }
+
+        public EndReason EndReason { get; internal set; }
+
+        /// <summary>Which tie-break rule decided the match when <see cref="EndReason"/> is TieBreak.</summary>
+        public TieBreakRule TieBreakRule { get; internal set; }
+
+        /// <summary>Keep and tower stats this match uses.</summary>
+        public StructureCatalog StructureCatalog { get; }
+
+        /// <summary>Combat state of every structure, indexed like the map's structure list.</summary>
+        public IReadOnlyList<StructureState> Structures => _structures;
+
+        /// <summary>Projectiles in flight, in id (firing) order.</summary>
+        public IReadOnlyList<Projectile> Projectiles => _projectiles;
+
+        internal List<Projectile> ProjectileList => _projectiles;
+
+        /// <summary>The id the next fired projectile will get. Ids start at 1 and are never reused.</summary>
+        public int NextProjectileId { get; internal set; }
 
         /// <summary>Always two players, index 0 and 1.</summary>
         public IReadOnlyList<PlayerState> Players => _players;
@@ -136,6 +181,13 @@ namespace NovaFaction.Sim
         /// <summary>The unit with this id, or null.</summary>
         public Unit? FindUnit(int id)
         {
+            int index = IndexOfUnit(id);
+            return index < 0 ? null : _units[index];
+        }
+
+        /// <summary>Position of the unit with this id in <see cref="Units"/>, or -1.</summary>
+        public int IndexOfUnit(int id)
+        {
             // Units are sorted by id, so binary search.
             int lo = 0, hi = _units.Count - 1;
             while (lo <= hi)
@@ -144,7 +196,7 @@ namespace NovaFaction.Sim
                 int midId = _units[mid].Id;
                 if (midId == id)
                 {
-                    return _units[mid];
+                    return mid;
                 }
                 if (midId < id)
                 {
@@ -155,7 +207,7 @@ namespace NovaFaction.Sim
                     hi = mid - 1;
                 }
             }
-            return null;
+            return -1;
         }
 
         internal Unit AddUnit(int owner, UnitDefinition definition, FixVector2 position)
@@ -181,12 +233,21 @@ namespace NovaFaction.Sim
             hasher.Add(Random.GetState());
             hasher.Add(ClockRemainingTicks);
             hasher.Add((int)Phase);
+            hasher.Add(Winner);
+            hasher.Add((int)EndReason);
+            hasher.Add((int)TieBreakRule);
             hasher.Add(_players.Length);
             foreach (PlayerState player in _players) // array order = player index
             {
                 hasher.AddHashable(player);
             }
             hasher.AddHashable(Map);
+            hasher.Add(StructureCatalog.ContentHash);
+            hasher.Add(_structures.Length);
+            foreach (StructureState structure in _structures) // index order
+            {
+                hasher.AddHashable(structure);
+            }
             hasher.Add(NextUnitId);
             hasher.Add(_units.Count);
             foreach (Unit unit in _units) // id order
@@ -198,8 +259,13 @@ namespace NovaFaction.Sim
             {
                 hasher.AddHashable(spawn);
             }
-            // Future state (structure HP, projectiles, mines, chests) is appended here:
-            // count first, then each item in id order.
+            hasher.Add(NextProjectileId);
+            hasher.Add(_projectiles.Count);
+            foreach (Projectile projectile in _projectiles) // id order
+            {
+                hasher.AddHashable(projectile);
+            }
+            // Future state (mines, chests) is appended here: count first, then each item in id order.
         }
     }
 

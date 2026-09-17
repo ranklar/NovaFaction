@@ -1,3 +1,4 @@
+using NovaFaction.Sim.Combat;
 using NovaFaction.Sim.Commands;
 using NovaFaction.Sim.Content;
 using NovaFaction.Sim.Map;
@@ -6,6 +7,10 @@ using NovaFaction.Sim.Units;
 
 namespace NovaFaction.Sim.Tests;
 
+/// <summary>
+/// Movement rules. These run with harmless structures (no damage, practically endless HP) so units
+/// walk and stop without dying; combat has its own tests.
+/// </summary>
 public class MovementTests
 {
     // twolane structure indices.
@@ -15,10 +20,10 @@ public class MovementTests
     private static readonly FixVector2 MapCorner = TestSim.V("18", "32"); // twolane size; rotation = corner - position
 
     private static Simulation NewSim(ulong seed = 1) =>
-        TestSim.New(TestSim.Rules(income: "0", start: "10"), MapTestData.LoadTwoLane(), seed);
+        TestSim.New(TestSim.Rules(income: "0", start: "10"), MapTestData.LoadTwoLane(), seed, TestSim.HarmlessStructures());
 
-    /// <summary>Runs until every unit is Holding (or the limit passes), checking walkability each tick. Returns ticks run.</summary>
-    private static int RunUntilAllHold(Simulation sim, int maxTicks)
+    /// <summary>Runs until every unit has stopped (Attacking or Holding) or the limit passes, checking walkability each tick. Returns ticks run.</summary>
+    internal static int RunUntilAllStopped(Simulation sim, int maxTicks)
     {
         Grid grid = sim.State.Map.Grid;
         for (int t = 1; t <= maxTicks; t++)
@@ -31,7 +36,7 @@ public class MovementTests
                     Assert.True(grid.IsWalkableAt(u.Position), "unit " + u.DefinitionId + " is on a blocked cell at " + u.Position);
                 }
             }
-            if (sim.State.Units.Count > 0 && sim.State.Units.All(u => u.State == UnitState.Holding))
+            if (sim.State.Units.Count > 0 && sim.State.Units.All(u => u.State == UnitState.Attacking || u.State == UnitState.Holding))
             {
                 return t;
             }
@@ -56,13 +61,15 @@ public class MovementTests
         // About 16 world units of path from the drop point; allow 20 / speed seconds plus the spawn delay.
         Fix limitSeconds = Fix.FromInt(20) / def.MoveSpeed + Fix.FromInt(1);
         int limitTicks = Fix.CeilToInt(limitSeconds * Fix.FromInt(20));
-        int ticks = RunUntilAllHold(sim, limitTicks);
+        int ticks = RunUntilAllStopped(sim, limitTicks);
         Assert.True(ticks > 0, cardId + " did not reach its objective within " + limitTicks + " ticks");
 
         Assert.Equal(def.SpawnCount, sim.State.Units.Count);
         foreach (Unit u in sim.State.Units)
         {
             Assert.Equal(expectedTower, u.Objective);
+            Assert.Equal(TargetRef.Structure(expectedTower), u.Target);
+            Assert.Equal(UnitState.Attacking, u.State);
             Fix distance = UnitMovement.DistanceToFootprint(sim.State.Map.Grid, u.Position, expectedTower);
             Assert.True(distance <= def.Range, cardId + " holds out of range: " + distance);
             // Not unreasonably short of range either (it walked, it did not stop early).
@@ -73,7 +80,9 @@ public class MovementTests
         FixVector2[] held = sim.State.Units.Select(u => u.Position).ToArray();
         TestSim.Run(sim, 100);
         Assert.Equal(held, sim.State.Units.Select(u => u.Position).ToArray());
-        Assert.All(sim.State.Units, u => Assert.Equal(UnitState.Holding, u.State));
+        Assert.All(sim.State.Units, u => Assert.Equal(UnitState.Attacking, u.State));
+        // ...and fighting: the harmless tower has lost HP.
+        Assert.True(sim.State.Structures[expectedTower].Hp < sim.State.StructureCatalog.ForwardTower.Hp);
     }
 
     [Fact]
@@ -94,8 +103,8 @@ public class MovementTests
             // Rounding is symmetric under rotation, so the routes should match to within rounding.
             Assert.True(FixVector2.Distance(mirrored, b.Position) <= Fix.Parse("0.01"),
                 "tick " + sim.State.Tick + ": " + a.Position + " vs " + b.Position);
-            if (holdA < 0 && a.State == UnitState.Holding) holdA = t;
-            if (holdB < 0 && b.State == UnitState.Holding) holdB = t;
+            if (holdA < 0 && a.State == UnitState.Attacking) holdA = t;
+            if (holdB < 0 && b.State == UnitState.Attacking) holdB = t;
         }
         Assert.InRange(holdB - holdA, -1, 1);
         Assert.True(holdA > 0);
@@ -109,7 +118,7 @@ public class MovementTests
         TestSim.Run(sim, 20);
         Unit u = sim.State.Units[0];
         int offAxis = 0;
-        for (int t = 0; t < 300 && u.State != UnitState.Holding; t++)
+        for (int t = 0; t < 300 && u.State != UnitState.Attacking; t++)
         {
             FixVector2 before = u.Position;
             sim.Tick(Array.Empty<Command>());
@@ -154,7 +163,7 @@ public class MovementTests
         bool crossedBlocked = false;
         int ticks = 0;
         FixVector2? firstStep = null;
-        while (griffin.State != UnitState.Holding)
+        while (griffin.State != UnitState.Attacking)
         {
             Assert.True(++ticks < 400, "griffin never arrived");
             FixVector2 before = griffin.Position;
@@ -207,9 +216,10 @@ public class MovementTests
                     "too close at tick " + sim.State.Tick + ": " + FixVector2.Distance(a.Position, b.Position));
             }
         }
-        Assert.Equal(UnitState.Holding, a.State);
-        Assert.Equal(UnitState.Holding, b.State);
-        Assert.True(FixVector2.Distance(a.Position, b.Position) >= range / Fix.FromInt(2));
+        Assert.Equal(UnitState.Attacking, a.State);
+        Assert.Equal(UnitState.Attacking, b.State);
+        // The second knight may squeeze in closer to the one already fighting, but never onto the same spot.
+        Assert.True(FixVector2.Distance(a.Position, b.Position) >= range / Fix.FromInt(4), "final " + a.Position + " " + b.Position);
     }
 
     [Fact]
@@ -240,21 +250,47 @@ public class MovementTests
             sim.State.AddUnit(0, griffin, spot),
         };
         var positions = units.Select(u => u.Position).ToArray();
-        Assert.Equal(FixVector2.Zero, UnitMovement.SeparationPush(units, positions, 0, rules));
+        var stopped = new bool[units.Count + 1];
+        Assert.Equal(FixVector2.Zero, UnitMovement.SeparationPush(units, positions, stopped, 0, rules));
         units.Add(sim.State.AddUnit(0, knight, spot + TestSim.V("0.3", "0")));
         positions = units.Select(u => u.Position).ToArray();
-        FixVector2 push = UnitMovement.SeparationPush(units, positions, 0, rules);
+        FixVector2 push = UnitMovement.SeparationPush(units, positions, stopped, 0, rules);
         // Half overlap -> half strength, pointing away (-X).
         Assert.Equal(-rules.UnitSeparationPushPerSecond / Fix.FromInt(2), push.X);
         Assert.Equal(Fix.Zero, push.Y);
     }
 
     [Fact]
-    public void HoldingUnits_ReselectWhenTheirObjectiveIsDestroyed()
+    public void Separation_StoppedNeighborsPushWeakly()
+    {
+        MatchRules rules = TestSim.Rules(stoppedPush: "0.3");
+        Simulation sim = NewSim();
+        UnitDefinition knight = sim.State.GetPlayer(0).Deck.Roster.Get("knight");
+        FixVector2 spot = TestSim.V("9", "6.5");
+        var units = new List<Unit>
+        {
+            sim.State.AddUnit(0, knight, spot),
+            sim.State.AddUnit(0, knight, spot + TestSim.V("0.3", "0")),
+            sim.State.AddUnit(0, knight, spot + TestSim.V("0.3", "0")),
+            sim.State.AddUnit(0, knight, spot + TestSim.V("0.3", "0")),
+        };
+        FixVector2[] positions = units.Select(u => u.Position).ToArray();
+        // Three stopped friends overlapping by half: their sum is capped at full strength, then weakened.
+        FixVector2 push = UnitMovement.SeparationPush(units, positions, new[] { false, true, true, true }, 0, rules);
+        Assert.Equal(-rules.UnitSeparationPushPerSecond * Fix.Parse("0.3"), push.X);
+        // The weakened push is slower than every unit, so a moving unit always gains ground.
+        Assert.All(TestSim.LoadFantasy().Units, u => Assert.True(u.MoveSpeed == Fix.Zero || -push.X < u.MoveSpeed));
+        // Moving neighbors still push at full strength (capped).
+        FixVector2 full = UnitMovement.SeparationPush(units, positions, new bool[4], 0, rules);
+        Assert.Equal(-rules.UnitSeparationPushPerSecond, full.X);
+    }
+
+    [Fact]
+    public void AttackingUnits_ReselectWhenTheirObjectiveIsDestroyed()
     {
         Simulation sim = NewSim();
         TestSim.Deploy(sim, 0, "knight", WestLaneP0);
-        Assert.True(RunUntilAllHold(sim, 1000) > 0);
+        Assert.True(RunUntilAllStopped(sim, 1000) > 0);
         Unit knight = sim.State.Units[0];
         Assert.Equal(Tower1West, knight.Objective);
         FixVector2 held = knight.Position;
@@ -266,7 +302,7 @@ public class MovementTests
         Assert.Equal(Keep1, knight.Objective); // nearer than the far tower from the west lane
         Assert.NotEqual(held, knight.Position);
 
-        Assert.True(RunUntilAllHold(sim, 1000) > 0);
+        Assert.True(RunUntilAllStopped(sim, 1000) > 0);
         Assert.Equal(Keep1, knight.Objective);
         Assert.True(UnitMovement.DistanceToFootprint(sim.State.Map.Grid, knight.Position, Keep1) <= knight.Definition.Range);
     }

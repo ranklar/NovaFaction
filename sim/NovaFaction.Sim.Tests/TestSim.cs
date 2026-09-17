@@ -9,9 +9,32 @@ namespace NovaFaction.Sim.Tests;
 /// <summary>Builds simulations with the shipped fantasy units and a default deck for both players.</summary>
 internal static class TestSim
 {
-    /// <summary>The movement keys of rules.json, for tests that write rules inline.</summary>
+    /// <summary>The movement and combat keys of rules.json, for tests that write rules inline.</summary>
     internal const string MovementRulesJson =
-        ", \"unitSeparationDistance\": 0.6, \"unitSeparationPushPerSecond\": 1.5, \"unitSpawnSpacing\": 0.5";
+        ", \"unitSeparationDistance\": 0.6, \"unitSeparationPushPerSecond\": 1.5, \"unitSpawnSpacing\": 0.5"
+        + ", \"unitStoppedPushFactor\": 0.3, \"aggroRadius\": 5.5, \"meleeTargetCrowdPenalty\": 1"
+        + ", \"suddenDeathIncomeMultiplier\": 2";
+
+    internal static string StructuresJson() => File.ReadAllText(MatchRulesTests.ContentPath("structures.json"));
+
+    /// <summary>The shipped content/structures.json.</summary>
+    internal static StructureCatalog LoadStructures() => StructureCatalog.FromJson(StructuresJson());
+
+    /// <summary>A structures file with the given stats (numbers as JSON text); both kinds share the combat stats.</summary>
+    internal static StructureCatalog Structures(string hp = "2500", string damage = "80", string interval = "1",
+        string range = "7", string targets = "both", string projectileSpeed = "10", string bonus = "500",
+        string keepHp = "4000", string keepBonus = "1000")
+    {
+        string Entry(string kind, string entryHp, string entryBonus) =>
+            "{\"kind\": \"" + kind + "\", \"hp\": " + entryHp + ", \"damage\": " + damage + ", \"attackIntervalSeconds\": "
+            + interval + ", \"range\": " + range + ", \"targets\": \"" + targets + "\", \"projectileSpeed\": "
+            + projectileSpeed + ", \"destructionBonus\": " + entryBonus + "}";
+        return StructureCatalog.FromJson("{\"formatVersion\": 1, \"structures\": [" + Entry("keep", keepHp, keepBonus)
+            + ", " + Entry("tower", hp, bonus) + "]}");
+    }
+
+    /// <summary>Structures that never hurt anyone and practically cannot fall: for movement-only tests.</summary>
+    internal static StructureCatalog HarmlessStructures() => Structures(hp: "1000000", damage: "0", keepHp: "1000000");
 
     internal static string FantasyUnitsJson() =>
         File.ReadAllText(MatchRulesTests.ContentPath(Path.Combine("factions", "fantasy", "units.json")));
@@ -26,25 +49,29 @@ internal static class TestSim
     internal static Deck DefaultDeck(MatchRules rules, UnitRoster? roster = null) =>
         Deck.Create(roster ?? LoadFantasy(), DefaultDeckIds, rules.DeckSize);
 
-    internal static MatchSetup Setup(MatchRules rules, MapDefinition map)
+    internal static MatchSetup Setup(MatchRules rules, MapDefinition map, StructureCatalog? structures = null)
     {
         UnitRoster roster = LoadFantasy();
-        return new MatchSetup(rules, map, DefaultDeck(rules, roster), DefaultDeck(rules, roster));
+        return new MatchSetup(rules, map, structures ?? LoadStructures(), DefaultDeck(rules, roster), DefaultDeck(rules, roster));
     }
 
-    internal static Simulation New(MatchRules rules, MapDefinition map, ulong seed) => new Simulation(Setup(rules, map), seed);
+    internal static Simulation New(MatchRules rules, MapDefinition map, ulong seed, StructureCatalog? structures = null) =>
+        new Simulation(Setup(rules, map, structures), seed);
 
     internal static Simulation Replay(MatchRules rules, MapDefinition map, ulong seed, CommandLog log) =>
         Simulation.Replay(Setup(rules, map), seed, log);
 
     /// <summary>Rules with the shipped structure but chosen gold values and spawn delay.</summary>
     internal static MatchRules Rules(string income = "0.35", string start = "10", string cap = "10", string spawnDelay = "1",
-        string separationDistance = "0.6", string push = "1.5", string spacing = "0.5") =>
-        MatchRules.FromJson("{\"ticksPerSecond\": 20, \"matchLengthSeconds\": 180, \"suddenDeathSeconds\": 60, "
+        string separationDistance = "0.6", string push = "1.5", string spacing = "0.5", string stoppedPush = "0.3",
+        string aggro = "5.5", string crowdPenalty = "1", string matchSeconds = "180", string suddenDeathSeconds = "60") =>
+        MatchRules.FromJson("{\"ticksPerSecond\": 20, \"matchLengthSeconds\": " + matchSeconds
+            + ", \"suddenDeathSeconds\": " + suddenDeathSeconds + ", \"suddenDeathIncomeMultiplier\": 2, "
             + "\"goldBaseIncomePerSecond\": " + income + ", \"goldStartingAmount\": " + start + ", \"goldCap\": " + cap
             + ", \"deploySpawnDelaySeconds\": " + spawnDelay + ", \"handSize\": 4, \"deckSize\": 8"
             + ", \"unitSeparationDistance\": " + separationDistance + ", \"unitSeparationPushPerSecond\": " + push
-            + ", \"unitSpawnSpacing\": " + spacing + "}");
+            + ", \"unitSpawnSpacing\": " + spacing + ", \"unitStoppedPushFactor\": " + stoppedPush
+            + ", \"aggroRadius\": " + aggro + ", \"meleeTargetCrowdPenalty\": " + crowdPenalty + "}");
 
     internal static FixVector2 V(string x, string y) => new FixVector2(Fix.Parse(x), Fix.Parse(y));
 

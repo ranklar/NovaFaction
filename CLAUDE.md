@@ -7,6 +7,32 @@ Glenn is the sole developer. He is an experienced program manager, not a current
 (C++ ~15 years ago). Explain changes in plain language, summarize what changed and exactly how to
 verify it. He uses Windows 11 only — give PowerShell commands, never bash/WSL/Linux.
 
+## How work flows
+
+Glenn's only command is `/next`; the planner (Glenn's Claude design chat) can
+start the same thing without him by dropping `docs\RUN.md`, which the
+`novafaction-inbox` routine in the Claude desktop app picks up on its schedule.
+Everything else lives in files:
+
+- `docs/BACKLOG.md` — the ordered queue; items marked blocked wait for Glenn or
+  for the planner's brief.
+- `docs/NEXT.md` — exactly one brief: the piece of work to do now.
+- `docs/STATUS.md` — newest entry first: what was done, test count, audit
+  verdict, **Glenn's actions**, what is next. This is what Glenn and the
+  planner read; nobody pastes summaries anywhere.
+- `docs/runs/` — the inbox routine's receipts (`<timestamp>/DONE.md`),
+  heartbeat and log; gitignored.
+- `.claude/skills/next` runs the loop; `.claude/skills/audit` is an independent
+  check by a fresh subagent; `.claude/hooks/stop-tests.ps1` runs the test suite
+  whenever a turn ends and refuses to let the session finish on red tests.
+- `.claude/settings.json` holds the permission rules. Deny rules are the real
+  guardrails: `.env` is never read, no force-push, no recursive delete, plus
+  this repo's own protected files.
+
+Never ask Glenn to paste text, copy files, or run a command for you. If
+something needs him, put it under **Glenn's actions** in STATUS.md and do
+everything around it.
+
 ## Repo layout
 - client/   Unity 6.3 LTS project (URP, Android first). Rendering, input, UI only.
 - sim/      NovaFaction.Sim (netstandard2.1 class library) and NovaFaction.Sim.Tests (xunit).
@@ -68,3 +94,9 @@ mirrors content/**/*.json into client/Assets/Resources/content/. It is idempoten
   Library/, or binaries outside Git LFS.
 - Keep docs/design.md current: when a design decision is made or changed in a session, update it.
 - End every task with: what changed, how to verify (commands or phone steps), what's next.
+
+## Session log
+- 2026-09-19 Session K: installed `.claude/` (settings, Stop hook, `next` and `audit` skills). The Stop hook runs
+  `dotnet test` (~10 s, 889 tests) only when `sim/`, `content/` or `tools/` changed since the last pass, and
+  exits in 0.3 s otherwise. Writing `.claude/` needs Glenn's confirmation in chat. The sim DLL differs after each
+  commit only because the SDK stamps the git commit ID into it (see BACKLOG "Discovered").

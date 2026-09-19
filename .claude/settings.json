@@ -1,0 +1,59 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet *)",
+      "Bash(git push)",
+      "Bash(git push origin main)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(powershell *)",
+      "Bash(powershell.exe *)",
+      "Bash(schtasks /query*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(.env)",
+      "Bash(*.env*)",
+      "PowerShell(*.env*)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean*)",
+      "Bash(rm -rf*)",
+      "Bash(rm -r *)",
+      "Bash(rmdir *)",
+      "Bash(del *)",
+      "Bash(Remove-Item * -Recurse*)",
+      "Edit(./client/**/*.unity)",
+      "Edit(./client/**/*.prefab)",
+      "Edit(./client/**/*.meta)",
+      "Edit(./client/ProjectSettings/**)",
+      "Edit(./client/Assets/Resources/content/**)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/stop-tests.ps1"
+            ],
+            "timeout": 900,
+            "statusMessage": "Running the test suite before finishing"
+          }
+        ]
+      }
+    ]
+  }
+}

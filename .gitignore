@@ -84,3 +84,7 @@ Desktop.ini
 .idea/
 *.swp
 *~
+.claude/hooks/.last-pass
+.claude/settings.local.json
+docs/runs/
+docs/RUN.md

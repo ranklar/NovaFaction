@@ -96,6 +96,16 @@ mirrors content/**/*.json into client/Assets/Resources/content/. It is idempoten
 - End every task with: what changed, how to verify (commands or phone steps), what's next.
 
 ## Session log
+- 2026-09-19 Session L: made the sim DLL reproducible. Two SDK properties are needed, not one, and both are
+  in `sim/NovaFaction.Sim/NovaFaction.Sim.csproj` with a comment saying why:
+  `IncludeSourceRevisionInInformationalVersion=false` keeps the sha out of the version string, and
+  `EnableSourceControlManagerQueries=false` stops the SDK querying git at all. The second one is the important
+  one: SourceLink writes the sha into the PDB, and the PDB's checksum and the deterministic module id are
+  embedded in the DLL, so without it the DLL still changed after every commit (exactly 72 bytes: module id,
+  PDB id, PDB checksum, two hash-derived stamps). A "new" DLL from `sync-to-unity.ps1` now means the sim
+  really changed. Caveat: reproducible per machine and per path only — deterministic builds embed absolute
+  paths. Still open: the `PowerShell(...)` deny-rule twins. Writing `.claude/` needs Glenn's yes in chat, and
+  this session ran unattended from `docs\RUN.md`, so the lines are under Glenn's actions in STATUS.md.
 - 2026-09-19 Session K: installed `.claude/` (settings, Stop hook, `next` and `audit` skills). The Stop hook runs
   `dotnet test` (~10 s, 889 tests) only when `sim/`, `content/` or `tools/` changed since the last pass, and
   exits in 0.3 s otherwise. Writing `.claude/` needs Glenn's confirmation in chat. The sim DLL differs after each

@@ -102,6 +102,13 @@ Themed factions released over time as content packs; fantasy faction first.
   and harness build identical content; SimSmokeTest.cs plays one headless match on Start and shows its final state
   hash, which must equal the harness's for the same seed. That is the cross-platform determinism check on real
   hardware.
+  The sim's csproj switches off the SDK's source-control queries
+  (EnableSourceControlManagerQueries and IncludeSourceRevisionInInformationalVersion), so the git commit id is
+  stamped into neither the DLL nor its PDB (decided Sept 2026). Without that, every commit changed the DLL's
+  module id and PDB checksum, so the sync reported a new DLL when no code had changed and a genuine sim change
+  became impossible to spot. The DLL is now byte-identical across commits and across a clean rebuild on the same
+  machine and path; a clone at a different path still builds a one-off different DLL, because deterministic
+  builds embed absolute paths.
 - sim/: netstandard2.1 C# library. Deterministic: fixed-point math, seeded RNG, fixed 20 ticks/s,
   flow-field pathfinding on a grid. Headless bot-vs-bot matches (HeadlessMatch; see "Controllers and bots") and a harness
   console app (tools/NovaFaction.Harness; see "Headless harness"); per-tick state hash for cross-platform determinism checks;

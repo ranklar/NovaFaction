@@ -1,39 +1,21 @@
-# NEXT — Stop the sim DLL changing on every commit
+# NEXT — placeholder, nothing queued
 
-Written by the planner (Glenn's Claude chat), 2026-09-19, from the item the
-Session K health check discovered. Glenn released the code work in this repo
-the same day; this is the first, deliberately small, item.
+Left as a placeholder by Claude Code, 2026-09-19, at the end of Session L.
+`/next` found nothing it is allowed to draft.
 
-## Scope
+The DLL version stamp fix is done (see the top entry of `docs/STATUS.md`).
+Every remaining item in `docs/BACKLOG.md` is blocked:
 
-1. In `sim/NovaFaction.Sim/NovaFaction.Sim.csproj` set
-   `<IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>`
-   so the .NET SDK stops stamping the git commit id into the DLL's
-   informational version.
-2. Run `powershell -ExecutionPolicy Bypass -File tools\sync-to-unity.ps1`
-   once, confirm the content copy reports 9 of 9 JSON files unchanged, and
-   commit the rebuilt `client/Assets/Plugins/NovaFaction/NovaFaction.Sim.dll`
-   (Git LFS tracks it). Then run the sync a second time and confirm it copies
-   nothing.
-3. Confirm `SimVersion.Current` did not need to change (no sim logic changed)
-   and say so in STATUS.md.
-4. If Claude Code is allowed to edit `.claude/settings.json` in this session,
-   add the `PowerShell(...)` twins of the Bash deny rules (force-push,
-   `reset --hard`, `git clean`, `Remove-Item -Recurse`, `rmdir`, `del`) that
-   the Session K entry recommended. If the edit is refused, list the exact
-   lines under Glenn's actions instead; do not route around the refusal.
+- item 1, the phone determinism check, is Glenn's hands;
+- items 2 and 3, M2 step 2 (render sim state) and step 3 (deploy input), wait
+  on the planner's brief, because they need Glenn in the Unity editor and the
+  planner splits code steps from editor steps;
+- item 4 needs Glenn to play the match and judge the pace;
+- item 5, the bot upgrade, comes after the vertical slice;
+- item 6, the studio name and the unit roster, is Glenn's call.
 
-## Acceptance criteria (the audit checks these)
-
-- `dotnet test sim\NovaFaction.Sim.Tests` green; count in STATUS.md.
-- After the commit, a fresh `sync-to-unity.ps1` run copies nothing.
-- `git log -1 -- client/Assets/Plugins/NovaFaction/NovaFaction.Sim.dll` shows
-  the new commit and the DLL is stored through LFS (`git lfs ls-files`).
-- No scene, prefab, `.meta` or ProjectSettings file changed.
-
-## After this session
-
-The next item is M2 step 2 (render sim state in Unity). The planner writes
-that brief after reading `docs/design.md`'s client architecture; `/next` should
-not draft it on its own because it needs Glenn's hands in the Unity editor for
-the scene wiring and the planner will split code from editor steps.
+So `/next` deliberately did not invent work. The next brief is the planner's to
+write: M2 step 2, from `docs/design.md`'s client architecture. If Glenn runs
+`/next` before that brief arrives, it will read this file, find every backlog
+item blocked, add a one-line "nothing released" entry to `docs/STATUS.md` and
+stop — that is the intended behaviour, not a failure.

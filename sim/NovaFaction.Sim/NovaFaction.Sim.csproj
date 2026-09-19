@@ -4,8 +4,11 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <LangVersion>9.0</LangVersion>
     <Nullable>enable</Nullable>
-    <!-- Keep the git commit id out of the DLL informational version, so an unchanged sim builds a
-         byte-identical DLL and sync-to-unity.ps1 has nothing to copy. -->
+    <!-- Keep the git commit id out of the build, so an unchanged sim always produces a
+         byte-identical DLL and sync-to-unity.ps1 has nothing to copy. Without this the SDK asks
+         git for HEAD and puts the sha in the informational version and (through SourceLink) in
+         the PDB, whose checksum and the deterministic module id both live inside the DLL. -->
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 

@@ -4,6 +4,9 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <LangVersion>9.0</LangVersion>
     <Nullable>enable</Nullable>
+    <!-- Keep the git commit id out of the DLL informational version, so an unchanged sim builds a
+         byte-identical DLL and sync-to-unity.ps1 has nothing to copy. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>

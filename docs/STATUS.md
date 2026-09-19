@@ -43,23 +43,13 @@ do. Everything else is handled.
   assertion: the harness reference match (seed 7, balanced vs balanced, twolane) still prints
   `Final hash: 0x52F44A49D82FFCDA` — the same value BACKLOG item 1 asks the phone to show.
 - **Glenn's actions:**
-  1. **Add the PowerShell deny rules.** Brief step 4 asked for these, and I did not make the
-     edit: this session ran unattended from a dropped `docs\RUN.md`, and rewriting Claude's own
-     permission rules needs your yes in chat (that is what Session K established). I did not
-     route around it. The guardrails against force-push, `reset --hard`, `git clean` and recursive
-     delete currently cover Bash only, and PowerShell is this machine's main shell. Either tell
-     me "add the PowerShell deny rules" in a session you start yourself and I will do it, or paste
-     these seven lines into the `deny` list in `.claude/settings.json` yourself:
-
-     ```json
-     "PowerShell(git push --force*)",
-     "PowerShell(git push -f*)",
-     "PowerShell(git reset --hard*)",
-     "PowerShell(git clean*)",
-     "PowerShell(Remove-Item * -Recurse*)",
-     "PowerShell(rmdir *)",
-     "PowerShell(del *)",
-     ```
+  1. ~~**Add the PowerShell deny rules.**~~ **Done 2026-09-19**, in a session Glenn started
+     himself: he asked for the edit in chat, so the seven `PowerShell(...)` lines (force-push,
+     `push -f`, `reset --hard`, `git clean`, `Remove-Item -Recurse`, `rmdir`, `del`) are now in
+     the `deny` list in `.claude/settings.json` alongside their `Bash(...)` twins. Session L
+     itself ran unattended from a dropped `docs\RUN.md` and could not make the edit, because
+     rewriting Claude's own permission rules needs Glenn's yes in chat (Session K established
+     that); it was not routed around.
   2. (Unchanged, BACKLOG item 1) Run SimSmokeTest on the phone and check that it shows
      `0x52F44A49D82FFCDA`. The hash is confirmed still current as of this session, so the
      comparison is valid.
